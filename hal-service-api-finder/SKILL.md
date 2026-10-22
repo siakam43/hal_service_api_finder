@@ -159,6 +159,204 @@ xargs -r -a "<out>/tmp/scope_roots.txt" -d '\n' grep -I -rn -F "<pattern>"
 
 ## 四、任务恢复机制
 
+### progress.json
+
+```json
+{
+  "phase": "locate_entry",
+  "service_name": "ar_service",
+  "project_dir": "/abs/path",
+  "scope": {
+    "file_count": 0,
+    "clean_code": true,
+    "scope_files": "tmp/scope_files.txt",
+    "scope_roots": "tmp/scope_roots.txt"
+  },
+  "locate_entry": {"status": "in_progress"},
+  "analyze_bind": {"status": "pending"},
+  "trace_dispatch": {"status": "pending"},
+  "output": {"status": "pending"},
+  "error": null
+}
+```
+
+- `phase` 取值：`locate_entry` / `analyze_bind` / `trace_dispatch` / `output` / `done`。
+- 阶段状态：`pending` / `in_progress` / `completed`。
+- 每次阶段切换立即保存。
+- 失败时不新增 failed 阶段；保留当前 phase，写入 `error: {code, message, evidence}`，下次运行从当前阶段重试。
+- 重试前清空 error。
+
+### entry_state.json
+
+```json
+{
+  "service_name": "ar_service",
+  "scope": {
+    "file_count": 123,
+    "clean_code": true,
+    "scope_files": "tmp/scope_files.txt",
+    "scope_roots": "tmp/scope_roots.txt"
+  },
+  "entry": {
+    "variable": "g_ArDriverEntry",
+    "file": "/abs/path/...",
+    "line": 39,
+    "module_name": "ar_service",
+    "bind": "HdfArDriverBind",
+    "init": "HdfArDriverInit",
+    "release": "HdfArDriverRelease",
+    "registration": {
+      "form": "HDF_INIT",
+      "file": "/abs/path/...",
+      "line": 50,
+      "evidence": "HDF_INIT(g_ArDriverEntry)"
+    }
+  },
+  "bind": {
+    "status": "completed",
+    "function": "HdfArDriverBind",
+    "file": "/abs/path/...",
+    "line": 72,
+    "host_type": "HdfArHost",
+    "dispatch_functions": [
+      {
+        "name": "ArDriverDispatch",
+        "file": "/abs/path/...",
+        "line": 129,
+        "via": "hdfArHost->ioService.Dispatch"
+      }
+    ],
+    "stub": {
+      "member": "stub",
+      "interface_type": "IActivityInterface",
+      "impl_class": "ArService",
+      "impl_file": "/abs/path/...",
+      "stub_class": "IActivityInterfaceStub",
+      "on_remote_request": {
+        "name": "OHOS::HDI::ActivityRecognition::V1_0::ActivityInterfaceStub::OnRemoteRequest",
+        "file": "/abs/path/...",
+        "line": 160
+      },
+      "evidence": "hdfArHost->stub = ...GetOrNewObject(serviceImpl, IActivityInterface::GetDescriptor())"
+    },
+    "service_registration": {
+      "file": "/abs/path/...",
+      "line": 110,
+      "evidence": "deviceObject->service = &hdfArHost->ioService"
+    }
+  }
+}
+```
+
+- `registration.form`：`HDF_INIT` / `other` / `unverified`。
+- `bind.status`：`pending` / `in_progress` / `completed`。
+- `stub` 可以为 `null`。
+- 阶段二可重复执行（幂等）：中断后重跑并覆盖。
+
+### trace_state.json
+
+```json
+{
+  "status": "in_progress",
+  "entry_dispatchers": [
+    {"name": "ArDriverDispatch", "file": "/abs/path/...", "line": 129}
+  ],
+  "queue": [
+    {
+      "id": 1,
+      "dispatcher": "ArDriverDispatch",
+      "dispatcher_file": "/abs/path/...",
+      "dispatcher_line": 129,
+      "current_cmd_expr": "cmdId",
+      "current_cmd_value": null,
+      "outer_cmd_expr": null,
+      "outer_cmd_value": null,
+      "data_vars": ["data", "dataParcel"],
+      "parent_case_id": null,
+      "path": ["ArDriverDispatch"],
+      "status": "pending"
+    }
+  ],
+  "cases": [
+    {
+      "id": 1,
+      "dispatcher": "OHOS::HDI::ActivityRecognition::V1_0::ActivityInterfaceStub::OnRemoteRequest",
+      "dispatcher_file": "/abs/path/...",
+      "dispatch_site": {"file": "/abs/path/...", "line": 163},
+      "level": 2,
+      "case_expr": "CMD_ACTIVITY_INTERFACE_GET_VERSION",
+      "case_value": 0,
+      "outer_cmd_expr": "CMD_ACTIVITY_INTERFACE_GET_VERSION",
+      "outer_cmd_value": 0,
+      "parent_case_id": null,
+      "status": "analyzed",
+      "handlers": [
+        {
+          "name": "ActivityInterfaceStubGetVersion",
+          "file": "/abs/path/...",
+          "line": 1200
+        }
+      ],
+      "evidence": "case CMD_ACTIVITY_INTERFACE_GET_VERSION: return ActivityInterfaceStubGetVersion(data, reply, option);"
+    }
+  ],
+  "handlers": [
+    {
+      "cmd_id_macro": "CMD_ACTIVITY_INTERFACE_GET_VERSION",
+      "cmd_id_value": 0,
+      "interface_function": "ActivityInterfaceStubGetVersion",
+      "file": "/abs/path/...",
+      "definition_line": 1200
+    }
+  ],
+  "default_cases": [],
+  "unresolved": [],
+  "dispatch_cache": [],
+  "visited": [],
+  "counters": {
+    "queue_remaining": 0,
+    "cases_total": 1,
+    "handlers_total": 1,
+    "unresolved_total": 0
+  }
+}
+```
+
+- `trace_state.status`：`in_progress` / `self_check` / `completed`。
+- `handlers` 是最终候选池；`definition_line` 仅用于调试，最终 JSON 不输出。
+- `default_cases` 不进入最终 JSON。
+- `unresolved` 条目包含 `kind`、`detail`、`tried`。
+- `visited` 条目包含函数定义信息和 cmd 上下文。
+- `dispatch_cache` 条目包含 `site`、`target`、`candidates`、`resolved`。
+- `counters` 用于恢复时的自洽检查。
+
+### 恢复流程
+
+1. 双方法检查 progress.json：
+   - 不存在 → 全新分析。
+   - 存在 → 继续。
+2. 校验 project_dir 和 service_name 与当前调用一致；不一致 → 报错 state_conflict，停止，不删除旧状态。
+3. phase = done → 双方法确认最终输出存在：
+   - 存在 → 报告完成，停止；
+   - 不存在且 trace_state 完整 → 从 trace_state 重新组装输出；
+   - 不存在且 trace_state 不完整 → 回到 trace_dispatch 继续分析。
+4. 按 phase 恢复：
+   - locate_entry：entry_state 已有匹配 entry → 跳到 analyze_bind；否则重跑阶段一。
+   - analyze_bind：bind 已完成且 dispatch_functions 非空 → 跳到 trace_dispatch；否则重跑阶段二。
+   - trace_dispatch：trace_state 存在 → 将 in_progress 工作项置回 pending，从第一个待处理项继续；跳过已 analyzed 的用例；queue 空 → 进入自检。trace_state 缺失 → 从 entry_state 重新初始化队列，重跑阶段三。
+   - output：跳过分析，直接从 trace_state 组装输出；成功后置 done。
+5. 加载后对照 counters 与实际数组长度；不一致以实际内容为准，不清空、不猜测性修复。
+6. 关键文件存在性一律双方法确认；结果无法判断 → 停止并报告。
+7. 状态文件采用“先写 .tmp 再 mv”的方式覆盖，避免中断产生半截 JSON。
+8. 存在与当前 project_dir/service_name 匹配的 progress.json 时，按恢复流程继续，不重新生成 scope 或 scope 文件；只有全新分析才重建 scope，除非恢复步骤明确要求重建。无 clean_code.txt 时 scope_roots = null，旧的 scope_roots.txt 删除或忽略。
+
+### 全新分析与旧输出
+
+- `progress.json` 不存在 → 全新分析；最终输出在完成时原子覆盖。
+- `progress.json` 存在但 phase 未完成 → 严格按恢复流程继续，不从头重跑。
+- 强制全新分析：删除 `progress.json` 与 `tmp/`。
+- 完成态 state 保留，不删除。
+
 ## 五、阶段一：定位服务注册点
 
 ## 六、阶段二：分析 Bind
