@@ -298,8 +298,8 @@ mkdir -p "<out>" || { echo 'output_dir_failed' >&2; exit 1; }
 
 - 队列、`visited`、`dispatch_cache` 只存在于内存，阶段三结束后不写入文件。
 - 不写 `status`、`phase`、`counters`、`queue`、`visited`、`dispatch_cache`。
-- `cases` 元素字段：`id`、`dispatcher`、`dispatcher_file`、`dispatcher_line`、`dispatch_site`、`level`、`case_expr`、`case_value`、`outer_cmd_expr`、`outer_cmd_value`、`parent_case_id`、`handlers`、`evidence`。
-- `handlers` 元素字段：`cmd_id_macro`、`cmd_id_value`、`interface_function`、`file`、`definition_line`；`definition_line` 仅用于定位与去重，最终 JSON 不包含。
+- `cases` 元素字段：`id`、`dispatcher`、`dispatcher_file`、`dispatcher_line`、`dispatch_site`、`level`、`case_expr`、`case_value`、`outer_cmd_expr`、`outer_cmd_value`、`parent_case_id`、`handlers`、`evidence`；其中 `handlers` 是 `{name, file, line}` 引用列表。
+- 顶层 `handlers` 元素字段：`cmd_id_macro`、`cmd_id_value`、`interface_function`、`file`、`definition_line`；`definition_line` 仅用于定位与去重，最终 JSON 不包含。
 - `default_cases` 元素字段：`dispatcher`、`dispatcher_file`、`dispatcher_line`、`dispatch_site`、`evidence`。
 - `unresolved` 元素字段：`kind`、`detail`、`tried`；`kind` 取 `cmd_value` / `target` / `definition` / `data_deferred` / `cycle`。
 - 以上元素都不写 status 等状态字段。
@@ -868,7 +868,7 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 
 执行说明：
 
-- 第 1-5 项检查 `03_trace.json`（队列与去重结果已在阶段三的内存追踪中处理）；第 6 项针对 8.1 组装后的最终数组核对。
+- 第 1 项检查内存队列；第 2-5 项检查 `03_trace.json`；第 6 项针对 8.1 组装后的最终数组核对。
 - 第 2 项中 lambda 的 `interface_function` 以 `<lambda@绝对路径:行号>` 形式为合规；其余函数必须是定义处作用域限定名。每个条目都要按 `file` 与定义位置 Read 确认完整函数体，且 `file` 必须在 `scope_files.txt` 内。
 - 第 3 项检查没有任何 handler 的 `cmd_id_macro == "default"`，且不存在仅由 `default_cases` 站点支撑的 handler。
 - 第 5 项 unresolved 数量以 `03_trace.json` 的 `unresolved` 长度为准，报告直接使用该长度。
@@ -945,6 +945,8 @@ codegraph 未安装/未配置 → 用常规工具代替，不中断分析。
 | `output_write_failed` | 最终 JSON 写入、回读、mv 或最终文件存在性确认失败 | 报告，结束 |
 | `self_check_failed` | 自检清单第 1-6 项失败 | 报告，结束，不写最终 JSON |
 | `internal_error` | 工具/文件 I/O 或无法继续读取源码等不可恢复错误 | 报告，结束 |
+
+除 `usage_error` / `invalid_project_dir` / `output_dir_failed` 外，其余错误在 `<out>` 已创建时均先写 `error.json` 再结束。
 
 ### 术语表
 

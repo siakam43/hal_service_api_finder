@@ -1078,7 +1078,7 @@ Expected:
 - no old `tmp/` paths (the "不创建 `tmp/` 子目录" statement and `*.json.tmp` atomic temp names are allowed);
 - heading count 12;
 - all JSON blocks valid;
-- line count recorded (actual 1018; the ~1000 target was missed because snapshot schemas and field lists were added — do not trim analysis rules to hit it).
+- line count recorded (actual 1020; the ~1000 target was missed because snapshot schemas and field lists were added — do not trim analysis rules to hit it).
 
 - [ ] **Step 3: Test the backup snippet in a temporary directory**
 
