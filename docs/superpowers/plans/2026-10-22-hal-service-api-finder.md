@@ -498,6 +498,7 @@ Include this exact JSON block under a `### trace_state.json` heading:
       "outer_cmd_expr": null,
       "outer_cmd_value": null,
       "data_vars": ["data", "dataParcel"],
+      "data_derived": true,
       "parent_case_id": null,
       "path": ["ArDriverDispatch"],
       "status": "pending"
@@ -554,7 +555,7 @@ Add these rules:
 - `handlers` 是最终候选池；`definition_line` 仅用于调试，最终 JSON 不输出。
 - `default_cases` 不进入最终 JSON。
 - `unresolved` 条目包含 `kind`、`detail`、`tried`。
-- `visited` 条目包含函数定义信息和 cmd 上下文。
+- `visited` 条目包含函数定义信息和 cmd 上下文，并带 `data_derived` 布尔字段。
 - `dispatch_cache` 条目包含 `site`、`target`、`candidates`、`resolved`。
 - `counters` 用于恢复时的自洽检查。
 - `queue` 只保存在处理中的工作项：处理前将该项置为 `in_progress`，处理完从 `queue` 移除；`queue_remaining` 必须等于 `queue` 的长度。
@@ -774,7 +775,7 @@ git commit -m "docs(hal-service-api-finder): add Bind analysis phase"
 
 Include:
 
-- Initial work item for each Dispatch function with a non-null definition file, with `current_cmd_expr`, `current_cmd_value = null`, `outer_cmd_expr/value = null`, `data_vars`, `parent_case_id = null`, `path`, `status = pending`. Skip `dispatch_functions` entries with `file == null` and record them in `trace_state.unresolved` (`kind = "definition"`); if all entries are skipped and `bind.stub.on_remote_request` is non-null, seed a work item from that OnRemoteRequest.
+- Initial work item for each Dispatch function with a non-null definition file, with `current_cmd_expr`, `current_cmd_value = null`, `outer_cmd_expr/value = null`, `data_vars` (target parameter names), `data_derived = true`, `parent_case_id = null`, `path`, `status = pending`. Skip `dispatch_functions` entries with `file == null` and record them in `trace_state.unresolved` (`kind = "definition"`); if all entries are skipped and `bind.stub.on_remote_request` is non-null, seed a work item from that OnRemoteRequest.
 - If Dispatch directly calls `stub->SendRequest(cmdId, ...)`, enqueue the corresponding stub's `OnRemoteRequest`, with outer still null.
 - Recognize: switch/case, range/mask/if-else, array/map/function-pointer tables, table registration, macro-generated dispatch, `SendRequest`/`OnRemoteRequest` forwarding, unconditional direct data handling.
 
@@ -856,7 +857,7 @@ Include:
 - Interface function definition must be in scope; otherwise `unresolved`, not output.
 - 不设深度上限、不设扇出上限。
 - Termination conditions: direct business handler found / no data target / unresolved / cycle.
-- Cycle key: `(函数定义文件+行号, current_cmd_expr, current_cmd_value, outer_cmd_expr, outer_cmd_value)`.
+- Cycle key: `(函数定义文件+行号, current_cmd_expr, current_cmd_value, outer_cmd_expr, outer_cmd_value, data_derived)`. A queue hit or non-ancestor visited hit is silent dedup; only an ancestor visited hit is a `cycle`. If the current item is `data_derived = true` and the visited entry is `false`, re-enqueue and merge.
 - Functions that both dispatch and process data → follow as dispatcher.
 - Save `trace_state` after each work item; list all fields; idempotency/dedup rules.
 

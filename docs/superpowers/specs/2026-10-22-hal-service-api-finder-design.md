@@ -458,7 +458,7 @@ C++ 间接调用、虚函数、函数指针、重载等解析细节可参考 tai
 1. 分支内找到 data 消费的直接目标业务函数 → 记为接口函数，停止深入该业务函数内部；
 2. 分支内确实没有 data 消费目标 → 记录 evidence，结束该分支；
 3. 目标无法静态确定，或定义不在 scope 内 → 记入 `unresolved`；
-4. 同一 `(函数定义文件+行号, current_cmd_expr, current_cmd_value, outer_cmd_expr, outer_cmd_value)` 重复出现 → 记 `cycle`，停止该分支。
+4. 同一 `(函数定义文件+行号, current_cmd_expr, current_cmd_value, outer_cmd_expr, outer_cmd_value, data_derived)` 重复出现，且 `visited` 条目的 `path` 是当前 `path` 的严格前缀 → 记 `cycle`，停止该分支；队列重复/菱形重复按去重终止，不写 `unresolved`；当前 `data_derived = true` 而命中条目为 `false` → 允许重新入队并合并分析。
 
 - 环检测和 `visited` 去重只用于防止无限递归，不作为数量限制。
 - 若函数既做分发又直接处理 data：按分发函数继续追踪；只有不构成分发的 data 消费函数才作为接口函数。
@@ -657,6 +657,7 @@ C++ 间接调用、虚函数、函数指针、重载等解析细节可参考 tai
       "outer_cmd_expr": null,
       "outer_cmd_value": null,
       "data_vars": ["data", "dataParcel"],
+      "data_derived": true,
       "parent_case_id": null,
       "path": ["ArDriverDispatch"],
       "status": "pending"
@@ -711,7 +712,7 @@ C++ 间接调用、虚函数、函数指针、重载等解析细节可参考 tai
 - `handlers` 是最终候选池；`definition_line` 仅用于调试，最终 JSON 不输出。
 - `default_cases` 不进入最终 JSON。
 - `unresolved` 条目包含 `kind`、`detail`、`tried`。
-- `visited` 条目包含函数定义信息和 cmd 上下文。
+- `visited` 条目包含函数定义信息和 cmd 上下文，并带 `data_derived` 布尔字段。
 - `dispatch_cache` 条目包含 `site`、`target`、`candidates`、`resolved`。
 - `counters` 用于恢复时的自洽检查。
 - `queue` 只保存在处理中的工作项：处理前将该项置为 `in_progress`，处理完从 `queue` 移除；`queue_remaining` 必须等于 `queue` 的长度。
