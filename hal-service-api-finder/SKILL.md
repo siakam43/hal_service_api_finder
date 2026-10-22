@@ -63,9 +63,7 @@ description: 当用户调用 /hal-service-api-finder <project_dir> <service_name
 ### 输出目录初始化
 
 - 输出根目录：`<out>` = `<project_dir>/.ethunter_out/hal-service-api-finder`。
-- 启动顺序：先按第四章 4.1 备份旧 `<out>` 并新建空目录，再执行本章的 scope 生成。
-- 不创建 `tmp/` 子目录；所有快照、scope 文件均直接写入 `<out>`，最终 JSON 仍用临时文件 + `mv`。
-- 备份/新建失败 → 报 `output_dir_failed` 并结束。
+- 若 `<out>` 已存在，先整体备份为 `<out>_bak`（旧 `<out>_bak` 先删除，只保留最近一次备份），再新建空 `<out>`；不得直接删除旧结果。`<out>` 不存在时保留现有 `<out>_bak`。
 
 ### 分析范围确定
 
@@ -548,7 +546,7 @@ deviceObject->service = &hdfDemoHost->ioService;
 ```
 
 - `service_name` 原样取自 `01_entry.json`；`entry` 只写 `variable`、`file`、`module_name` 三个字段。
-- `bind` 对象字段形状见第四章 4.2 的 `02_bind.json`（`function` / `file` / `line` / `host_type` / `dispatch_functions` / `stub` / `service_registration`），不写 `status`。
+- `bind` 对象字段形状见第四章 4.1 的 `02_bind.json`（`function` / `file` / `line` / `host_type` / `dispatch_functions` / `stub` / `service_registration`），不写 `status`。
 - 直接写 `<out>/02_bind.json`；写入失败 → 删除可能残留的 `<out>/02_bind.json`，再写 `error.json`（`phase = "analyze_bind"`，`code = "snapshot_write_failed"`），停止。
 - 进入 `## 七、阶段三：cmdId 分发追踪`。
 
@@ -926,6 +924,7 @@ codegraph 未安装/未配置 → 用常规工具代替，不中断分析。
 8. 每个阶段结束写一次快照；最终 JSON 最后一次性原子写出。
 9. 关键文件存在性双方法确认，禁止 `test -f`。
 10. 全中文提示词，同一概念用词前后一致。
+11. 所有 shell 命令中的路径变量使用双引号；`<project_dir>` 按 shell 规则转义。
 
 ### 全局错误码
 
