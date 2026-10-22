@@ -16,7 +16,7 @@ The deliverable is a prompt document. Each task ends with static checks:
 
 1. **Removal checks:** no old state/resume tokens in the edited section.
 2. **Snapshot checks:** new file names appear in the correct phase.
-3. **Final checks:** no `progress.json` / `entry_state.json` / `trace_state.json` / `tmp/` / `任务恢复` / `断点续跑` / `state_conflict` / `state_io_error` anywhere in `SKILL.md`.
+3. **Final checks:** no `progress.json` / `entry_state.json` / `trace_state.json` / old `tmp/` paths / `任务恢复` / `断点续跑` / `state_conflict` / `state_io_error` anywhere in `SKILL.md`. Intentional `*.json.tmp` atomic temp names and the "不创建 `tmp/` 子目录" statement are allowed.
 4. **Backup behavior:** run the backup snippet in a temporary directory and verify `_bak` contents and the new empty `<out>`.
 5. **Structure checks:** 12 top-level headings; every fenced `json` block parses.
 
@@ -316,12 +316,12 @@ with:
 - [ ] **Step 5: Verify Task 2**
 
 ```bash
-sed -n '/^## 二、/,/^## 四、/p' hal-service-api-finder/SKILL.md | grep -n 'tmp' || echo 'no tmp paths in sections 2-3'
+sed -n '/^## 二、/,/^## 四、/p' hal-service-api-finder/SKILL.md | grep -n -E 'tmp/scope_files|tmp/scope_roots|tmp/entry_state|tmp/trace_state|hal-service-api-finder/tmp' || echo 'no old tmp paths in sections 2-3'
 sed -n '/^## 二、/,/^## 四、/p' hal-service-api-finder/SKILL.md | grep -n 'progress.json\|恢复检查' || echo 'no recovery references in sections 2-3'
 grep -c '^## ' hal-service-api-finder/SKILL.md
 ```
 
-Expected: no `tmp/`, no recovery references, heading count 12.
+Expected: no old `tmp/` paths, no recovery references, heading count 12. The deliberate line "不创建 `tmp/` 子目录" is allowed.
 
 - [ ] **Step 6: Commit**
 
@@ -972,7 +972,7 @@ At the top of the old plan (after its header block) and the old design spec (aft
 
 ```bash
 grep -n -E 'progress\.json|entry_state\.json|trace_state\.json|恢复流程|断点续跑|state_conflict|state_io_error' hal-service-api-finder/SKILL.md || echo 'no old recovery references'
-grep -n 'tmp' hal-service-api-finder/SKILL.md || echo 'no tmp paths'
+grep -n -E 'tmp/scope_files|tmp/scope_roots|tmp/entry_state|tmp/trace_state|hal-service-api-finder/tmp' hal-service-api-finder/SKILL.md || echo 'no old tmp paths'
 grep -c '^## ' hal-service-api-finder/SKILL.md
 python3 - <<'PY'
 import json, re, pathlib
@@ -987,7 +987,7 @@ wc -l hal-service-api-finder/SKILL.md
 
 Expected:
 - no old recovery tokens;
-- no `tmp/` paths;
+- no old `tmp/` paths (the "不创建 `tmp/` 子目录" statement and `*.json.tmp` atomic temp names are allowed);
 - heading count 12;
 - all JSON blocks valid;
 - line count below 1000 (record actual).
@@ -995,23 +995,36 @@ Expected:
 - [ ] **Step 3: Test the backup snippet in a temporary directory**
 
 ```bash
+set -e
 tmp=$(mktemp -d)
 out="$tmp/out"; bak="${out}_bak"
+
+backup() {
+  if [ -d "$out" ]; then
+    if [ -d "$bak" ]; then rm -rf "$bak"; fi
+    mv "$out" "$bak"
+  fi
+  mkdir -p "$out"
+}
+
 mkdir -p "$out"; echo old > "$out/old.txt"
-if [ -d "$bak" ]; then rm -rf "$bak"; fi
-if [ -d "$out" ]; then mv "$out" "$bak"; fi
-mkdir -p "$out"
+backup
 test -f "$bak/old.txt" && test -z "$(ls -A "$out")" && echo 'first backup: OK'
+
 echo older > "$bak/older.txt"
-mkdir -p "$out"; echo new > "$out/new.txt"
-if [ -d "$bak" ]; then rm -rf "$bak"; fi
-if [ -d "$out" ]; then mv "$out" "$bak"; fi
-mkdir -p "$out"
+echo new > "$out/new.txt"
+backup
 test ! -f "$bak/older.txt" && test -f "$bak/new.txt" && test -z "$(ls -A "$out")" && echo 'replacement backup: OK'
+
+rm -rf "$out"
+echo keep > "$bak/keep.txt"
+backup
+test -f "$bak/keep.txt" && test -z "$(ls -A "$out")" && echo 'preserve backup when out absent: OK'
+
 rm -rf "$tmp"
 ```
 
-Expected: `first backup: OK` and `replacement backup: OK`.
+Expected: `first backup: OK`, `replacement backup: OK`, and `preserve backup when out absent: OK`.
 
 - [ ] **Step 4: Commit and push**
 
