@@ -788,7 +788,7 @@ Replace the intro paragraph:
 with:
 
 ```text
-自检直接基于内存中的追踪结果和 `03_trace.json`；不再有 status 字段或 phase 转换。执行以下清单：
+自检以 `03_trace.json` 为准；队列与去重结果已在阶段三的内存追踪中处理，不再有 status 字段或 phase 转换。执行以下清单：
 ```
 
 - [ ] **Step 3: Update the self-check checklist**
@@ -799,9 +799,9 @@ Replace the checklist with:
 1. 队列已处理完（所有工作项已从内存队列移除）。
 2. 每个 `handlers` 条目都能在 scope_files 内定位到函数定义，且函数名为限定名。
 3. `default_cases` 没有混入 `handlers`。
-4. handlers 已按四元组去重，排序规则已执行。
-5. `unresolved` 已记录，数量与报告一致。
-6. 最终 JSON 恰好包含四个字段，无额外字段。
+4. `handlers` 已按阶段三的单次运行去重规则处理（不要求四元组去重或排序）。
+5. `unresolved` 已记录；报告数量以此长度为准。
+6. 最终 JSON 恰好包含四个字段，无额外字段；已按四元组去重并执行排序；UTF-8 编码，缩进 2 空格。
 7. 写临时文件后 Read 回读，核对数组长度、字段名、类型。
 8. `mv` 后双方法确认最终文件存在。
 ```
@@ -811,10 +811,10 @@ Update the execution notes to exactly:
 ```text
 执行说明：
 
-- 第 1-5 项检查内存中的追踪结果和 `03_trace.json`；第 6 项针对 8.1 组装后的最终数组核对。
+- 第 1-5 项检查 `03_trace.json`（队列与去重结果已在阶段三的内存追踪中处理）；第 6 项针对 8.1 组装后的最终数组核对。
 - 第 2 项中 lambda 的 `interface_function` 以 `<lambda@绝对路径:行号>` 形式为合规；其余函数必须是定义处作用域限定名。每个条目都要按 `file` 与定义位置 Read 确认完整函数体，且 `file` 必须在 `scope_files.txt` 内。
 - 第 3 项检查没有任何 handler 的 `cmd_id_macro == "default"`，且不存在仅由 `default_cases` 站点支撑的 handler。
-- 第 5 项 unresolved 数量以 `03_trace.json` 的 `unresolved` 长度为准，并与完成报告一致。
+- 第 5 项 unresolved 数量以 `03_trace.json` 的 `unresolved` 长度为准，报告直接使用该长度。
 - 第 7 项回读后核对：数组长度等于去重后的记录数；每条键集合恰为四字段；`cmd_id_macro` / `interface_function` / `file` 为字符串，`cmd_id_value` 为整数或 null。必须读到文件末尾；截断视为回读失败。
 - 第 8 项双方法确认最终文件存在（`ls` + `Read`），禁止 `test -f` / `[ -f ]`。
 ```
@@ -845,8 +845,8 @@ Replace:
 with:
 
 ```text
-- 自检任一失败 → 写 `error.json`（`phase = "output"`，`code = "self_check_failed"`，message/evidence 记录失败项编号与证据），停止；不得写最终 JSON。
-- 写临时文件、回读校验、`mv` 或最终文件存在性确认失败 → 删除可能残留的 `<out>/<service_name>_api.json.tmp`，写 `error.json`（`phase = "output"`，`code = "output_write_failed"`，evidence 记录临时/最终路径与失败动作），停止。
+- 清单第 1-6 项任一失败 → 写 `error.json`（`phase = "output"`，`code = "self_check_failed"`，message/evidence 记录失败项编号与证据），停止；不得写最终 JSON。
+- 清单第 7-8 项（写临时文件、回读校验、`mv`、最终文件存在性确认）失败 → 删除可能残留的 `<out>/<service_name>_api.json.tmp`，写 `error.json`（`phase = "output"`，`code = "output_write_failed"`，message/evidence 记录临时/最终路径与失败动作），停止。
 - 最终文件必须存在；无法确认存在即按 `output_write_failed` 处理，本次任务失败。
 ```
 

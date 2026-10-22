@@ -219,7 +219,7 @@ mkdir -p "<out>" || { echo 'output_dir_failed' >&2; exit 1; }
 
 ### 5.5 输出
 
-- 自检基于内存中的追踪结果和 `03_trace.json`；不再有 trace_state.status 或 phase 转换。
+- 自检以 `03_trace.json` 为准；不再有 trace_state.status 或 phase 转换。
 - 组装最终四字段 JSON，写临时文件，Read 回读，`mv` 为 `<service_name>_api.json`。
 - 自检失败 → `error.json`（phase=output，code=self_check_failed），停止，不写最终 JSON。
 - 最终写入失败 → `error.json`（phase=output，code=output_write_failed），停止。
