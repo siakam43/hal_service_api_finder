@@ -331,13 +331,13 @@ host->Dispatch = X;              // Host 直接内嵌 IDeviceIoService 时
 
 ### 7.5 阶段产物
 
-写入 `tmp/entry_state.json` 的 `bind` 字段，保存后进入 `trace_dispatch`。
+阶段开始时若已有 bind 对象，先将 `bind.status` 置为 `in_progress`；提取成功后写 `completed`。写入 `tmp/entry_state.json` 的 `bind` 字段，保存后进入 `trace_dispatch`。
 
 ## 8. 阶段三：cmdId 分发追踪
 
 ### 8.1 初始化工作队列
 
-1. 为 `entry_state.bind.dispatch_functions` 中每个 Dispatch 函数创建一个工作项。
+1. 为 `entry_state.bind.dispatch_functions` 中每个定义文件非 null 的 Dispatch 函数创建一个工作项；file 为 null 的条目不生成工作项，记入 `trace_state.unresolved`（kind = "definition"）。若所有条目都被跳过且 `bind.stub.on_remote_request` 非 null，则用该 OnRemoteRequest 创建初始工作项。
 2. 初始值：
    - `dispatcher`：Dispatch 函数限定名；
    - `current_cmd_expr`：cmdId 参数名（通常 `cmdId`）；
@@ -632,8 +632,8 @@ C++ 间接调用、虚函数、函数指针、重载等解析细节可参考 tai
 ```
 
 - `registration.form`：`HDF_INIT` / `other` / `unverified`。
-- `bind.status`：`pending` / `in_progress` / `completed`。
-- `stub` 可以为 `null`。
+- `bind.status`：`pending` / `in_progress` / `completed`；阶段二开始时若已有 bind 对象，必须先将 `bind.status` 置为 `in_progress`，失败时保持该值。
+- `stub` 可以为 `null`；`host_type` 可以为 `null`；`service_registration` 的 `file`/`line`/`evidence` 可以为 `null`；`stub.on_remote_request` 可以为 `null`。
 - 阶段二可重复执行（幂等）：中断后重跑并覆盖，不影响后续。
 - 恢复时校验 `entry_state.service_name` 与当前 `service_name` 一致；不一致视为身份不一致，报 `state_conflict` 并停止，不混用旧状态。
 

@@ -471,8 +471,8 @@ Include this exact JSON block under a `### entry_state.json` heading:
 Add these rules:
 
 - `registration.form`：`HDF_INIT` / `other` / `unverified`。
-- `bind.status`：`pending` / `in_progress` / `completed`。
-- `stub` 可以为 `null`。
+- `bind.status`：`pending` / `in_progress` / `completed`；阶段二开始时若已有 bind 对象，必须先将 `bind.status` 置为 `in_progress`，失败时保持该值。
+- `stub` 可以为 `null`；`host_type` 可以为 `null`；`service_registration` 的 `file`/`line`/`evidence` 可以为 `null`；`stub.on_remote_request` 可以为 `null`。
 - 阶段二可重复执行（幂等）：中断后重跑并覆盖。
 - 恢复时校验 `entry_state.service_name` 与当前 `service_name` 一致；不一致视为身份不一致，报 `state_conflict` 并停止，不混用旧状态。
 
