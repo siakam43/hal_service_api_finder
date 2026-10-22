@@ -62,9 +62,9 @@ description: 当用户调用 /hal-service-api-finder <project_dir> <service_name
 ### 输出目录初始化
 
 - 输出根目录：`<out>` = `<project_dir>/.ethunter_out/hal-service-api-finder`。
-- 执行 `mkdir -p <project_dir>/.ethunter_out/hal-service-api-finder/tmp`。
-- 创建失败（权限不足、只读文件系统、同名文件占用等）→ 报错 `output_dir_failed` 并结束。
-- 后续所有中间文件与最终 `<service_name>_api.json` 均写入 `<out>`。
+- 启动顺序：先按第四章 4.1 备份旧 `<out>` 并新建空目录，再执行本章的 scope 生成。
+- 不创建 `tmp/` 子目录；所有快照、scope 文件与最终 JSON 均直接写入 `<out>`。
+- 备份/新建失败 → 报 `output_dir_failed` 并结束。
 
 ### 分析范围确定
 
@@ -164,7 +164,7 @@ grep -I -H -n -E "<pattern>" "<file>"
 
 ## 四、中间结果记录
 
-本 skill 不做任务恢复，也不读取历史结果。每次执行开始时，把旧输出目录整体备份，再新建空目录，从零开始分析。中间结果只用于调试。
+本 skill 不做任务恢复，也不读取历史结果。每次执行开始时，把旧输出目录整体备份，再新建空目录，从零开始分析。中间结果用于阶段交接与调试，不读取历史结果。
 
 ### 4.1 输出目录与启动清理
 
@@ -174,23 +174,28 @@ grep -I -H -n -E "<pattern>" "<file>"
 启动时依次执行：
 
 ```bash
-if [ -d "<out>_bak" ]; then rm -rf "<out>_bak"; fi
-if [ -d "<out>" ]; then mv "<out>" "<out>_bak"; fi
-mkdir -p "<out>"
+if [ -d "<out>" ]; then
+  if [ -d "<out>_bak" ]; then rm -rf "<out>_bak" || exit 1; fi
+  mv "<out>" "<out>_bak" || exit 1
+fi
+mkdir -p "<out>" || exit 1
 ```
 
-- 已有 `<out>_bak` → 先删除，只保留最近一次备份。
-- 已有 `<out>` → 整体 `mv` 为 `<out>_bak`，旧最终 JSON、阶段快照、scope 文件、error.json 一并保留在备份中。
+- 只有 `<out>` 存在时才处理备份；`<out>` 不存在时保留现有 `<out>_bak`。
+- 已有 `<out>` 时，若 `<out>_bak` 存在则先删除，再把 `<out>` 整体 `mv` 为 `<out>_bak`，只保留最近一次备份。旧最终 JSON、阶段快照、scope 文件、error.json 一并保留在备份中。
 - 新目录创建后重新生成 `scope_files.txt` / `scope_roots.txt`。
-- 不读取旧结果，不判断 project/service 匹配，不做续跑。
-- 备份、mv 或 mkdir 失败 → 报 `output_dir_failed`，停止；此时若 `<out>` 无法创建，只在对话中报告，不写 error.json。
+- 不读取旧结果，不判断 project/service 匹配，不续跑。
+- 所有路径使用双引号；`<project_dir>` 来自用户参数，按 shell 引号处理。
+- `rm`/`mv`/`mkdir` 任一步失败 → 报 `output_dir_failed`，停止；此时若 `<out>` 无法创建，只在对话中报告，不写 error.json。
+
+这里的 `[ -d ]` 仅用于 shell 控制流；最终文件/目录存在性仍按第三章双方法确认。
 
 输出目录结构：
 
 ```text
 <out>/
   scope_files.txt
-  scope_roots.txt
+  scope_roots.txt（仅 clean_code.txt 分支存在）
   01_entry.json
   02_bind.json
   03_trace.json
@@ -291,7 +296,7 @@ mkdir -p "<out>"
 
 - 队列、`visited`、`dispatch_cache` 只存在于内存，阶段三结束后不写入文件。
 - 不写 `status`、`phase`、`counters`、`queue`、`visited`、`dispatch_cache`。
-- `cases`、`handlers`、`default_cases`、`unresolved` 的元素结构沿用原定义，但去掉 `status` 等恢复字段。
+- `cases`、`handlers`、`default_cases`、`unresolved` 的元素字段由后续阶段定义；不写 status 等状态字段。
 
 #### error.json
 
@@ -307,6 +312,7 @@ mkdir -p "<out>"
 ```
 
 `phase` 只是失败位置标签，不参与恢复。写入 error.json 后停止；不写最终 JSON。
+error.json 只在新 `<out>` 已成功创建后写入；备份/mv/mkdir 失败时只在对话中报告。
 
 ## 五、阶段一：定位服务注册点
 

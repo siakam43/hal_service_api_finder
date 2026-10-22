@@ -42,25 +42,30 @@
 启动时依次执行：
 
 ```bash
-if [ -d "<out>_bak" ]; then rm -rf "<out>_bak"; fi
-if [ -d "<out>" ]; then mv "<out>" "<out>_bak"; fi
-mkdir -p "<out>"
+if [ -d "<out>" ]; then
+  if [ -d "<out>_bak" ]; then rm -rf "<out>_bak" || exit 1; fi
+  mv "<out>" "<out>_bak" || exit 1
+fi
+mkdir -p "<out>" || exit 1
 ```
 
 规则：
 
-- `<out>_bak` 已存在 → 先删除，只保留最近一次备份。
-- `<out>` 已存在 → 整体 `mv` 为 `<out>_bak`，旧最终 JSON、阶段快照、scope 文件、error.json 一并保留在备份中。
-- 新建 `<out>` 后，重新生成 `scope_files.txt` / `scope_roots.txt`。
-- 不读取旧结果，不判断 project/service 匹配，不做续跑。
-- 备份、mv 或 mkdir 失败 → 报 `output_dir_failed`，停止；此时若 `<out>` 无法创建，只在对话中报告，不写 error.json。
+- 只有 `<out>` 存在时才处理备份；`<out>` 不存在时保留现有 `<out>_bak`。
+- 已有 `<out>` 时，若 `<out>_bak` 存在则先删除，再把 `<out>` 整体 `mv` 为 `<out>_bak`，只保留最近一次备份。旧最终 JSON、阶段快照、scope 文件、error.json 一并保留在备份中。
+- 新目录创建后重新生成 `scope_files.txt` / `scope_roots.txt`。
+- 不读取旧结果，不判断 project/service 匹配，不续跑。
+- 所有路径使用双引号；`<project_dir>` 来自用户参数，按 shell 引号处理。
+- `rm`/`mv`/`mkdir` 任一步失败 → 报 `output_dir_failed`，停止；此时若 `<out>` 无法创建，只在对话中报告，不写 error.json。
+
+这里的 `[ -d ]` 仅用于 shell 控制流；最终文件/目录存在性仍按第三章双方法确认。
 
 新输出目录结构：
 
 ```text
 <out>/
   scope_files.txt
-  scope_roots.txt
+  scope_roots.txt（仅 clean_code.txt 分支存在）
   01_entry.json
   02_bind.json
   03_trace.json
@@ -248,7 +253,7 @@ mkdir -p "<out>"
 
 ## 9. 验证方式
 
-1. 静态检查 `SKILL.md` 中不再出现 `progress.json`、`entry_state.json`、`trace_state.json`、`恢复`、`断点续跑`、`state_conflict`、`state_io_error`。
+1. 静态检查 `SKILL.md` 中不再出现指向旧机制的引用（`progress.json`、`entry_state.json`、`trace_state.json`、`恢复流程`、`断点续跑`、`state_conflict`、`state_io_error` 等）；允许“不做任务恢复”“不写 counters”这类明确的否定表述。
 2. 用临时目录实测备份逻辑：旧 `<out>` → `<out>_bak`，新 `<out>` 为空；已有 `_bak` 时先删除再备份。
 3. `01_entry.json`、`02_bind.json`、`03_trace.json`、`error.json` 示例均可解析为 JSON。
 4. 12 个顶级章节保持不变；最终 JSON 四字段不变。
@@ -257,7 +262,7 @@ mkdir -p "<out>"
 
 ## 10. 预期效果
 
-- 第四章从 232 行降到约 50-60 行。
+- 第四章从 232 行降到约 100-150 行（含 JSON 示例）。
 - 第五、六、七、八章删除大量状态更新和续跑描述。
 - 每次执行行为固定为：备份旧输出 → 新建目录 → 从零分析 → 阶段快照 → 最终 JSON。
 - 调试时只需查看 `01_entry.json`、`02_bind.json`、`03_trace.json`、`error.json`。
