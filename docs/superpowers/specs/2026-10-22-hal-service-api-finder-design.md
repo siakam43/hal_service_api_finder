@@ -914,7 +914,7 @@ description: 当用户调用 /hal-service-api-finder <project_dir> <service_name
 
 ### 14.1 demo_service 样例走查
 
-使用 rr1.txt 中的样例：
+使用示例代码：
 
 1. 搜索 `"demo_service"` → 命中 `g_DemoDriverEntry` 的 `.moduleName`。
 2. 读取初始化 → `.Bind = HdfDemoDriverBind`，`.Init = HdfDemoDriverInit`，`.Release = HdfDemoDriverRelease`。
@@ -1029,7 +1029,7 @@ Agent：
 - 提交身份与 api-finder 仓库一致（`siakam43` 及对应邮箱）。
 - 使用已登录的 `gh` CLI 创建远端仓库并推送。
 - 初始提交内容：
-  - `rr1.txt`；
+  - 原始需求文档；
   - `docs/superpowers/specs/2026-10-22-hal-service-api-finder-design.md`；
   - `.gitignore`（忽略 `.omc/`）。
 - 实现完成后新增 `hal-service-api-finder/SKILL.md` 并提交。

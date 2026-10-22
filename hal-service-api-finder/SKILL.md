@@ -417,7 +417,7 @@ xargs -r -a "<out>/tmp/scope_files.txt" -d '\n' grep -I -H -n -F '"<service_name
   - `module_name`：`<service_name>`；
   - `bind` / `init` / `release`：对应成员的赋值表达式原文；成员缺失或值为 `NULL` / `nullptr` / 空时记 `null`。
 
-合法命中示例（rr1）：
+合法命中示例：
 
 ```c
 struct HdfDriverEntry g_DemoDriverEntry = {
@@ -594,7 +594,7 @@ Bind 函数体内没有 Dispatch 赋值时，按以下顺序继续，不得因 B
 
 记录 `bind.service_registration = {file, line, evidence}`：`file`/`line` 取 `scope_files.txt` 顺序中的第一处有效赋值，`evidence` 记语句原文（多处时列出全部）。该字段仅作证据，缺失不失败：记 `{file: null, line: null, evidence: null}` 后继续。
 
-rr1 合法示例：
+合法示例：
 
 ```c
 hdfDemoHost->ioService.Dispatch = DemoDriverDispatch;

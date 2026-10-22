@@ -6,7 +6,7 @@
 
 **Architecture:** A single Chinese prompt document organized as a four-phase state machine: `locate_entry → analyze_bind → trace_dispatch → output`. State persists in `progress.json`, `tmp/entry_state.json`, and `tmp/trace_state.json` for resume. All analysis is done by the main agent; there are no scripts and no sub-agents.
 
-**Tech Stack:** Markdown only. Verification is static: grep checks, JSON-block parsing, and a manual walkthrough of the rr1 `demo_service` sample. No runtime tests.
+**Tech Stack:** Markdown only. Verification is static: grep checks, JSON-block parsing, and a manual walkthrough of the `demo_service` sample. No runtime tests.
 
 ---
 
@@ -16,7 +16,7 @@ The deliverable is a prompt document, not executable code. Each task ends with e
 
 1. **Structure checks:** `grep` for required headings, field names, error codes, and forbidden instructions.
 2. **JSON checks:** extract every fenced `json` block from `SKILL.md` and parse it with Python's `json` module.
-3. **Final walkthrough:** manually trace the `demo_service` sample from rr1.txt through the prompt text and confirm every step has an actionable instruction.
+3. **Final walkthrough:** manually trace the `demo_service` sample through the prompt text and confirm every step has an actionable instruction.
 
 Use these commands from the repository root:
 
@@ -669,7 +669,7 @@ Include these subsections:
 5. **失败处理** — `service_not_found` with scope file count, searched patterns, and a spelling/clean_code suggestion; `bind_not_found` when `.Bind` is missing/empty/NULL.
 6. **阶段产物** — write `entry` and `scope` to `tmp/entry_state.json`; proceed to `analyze_bind`.
 
-Include the sample code block from rr1:
+Include the sample code block:
 
 ```c
 struct HdfDriverEntry g_DemoDriverEntry = {
@@ -726,7 +726,7 @@ Include these subsections:
 4. **服务注册证据** — find `deviceObject->service = &host->ioService` or equivalent; record evidence only; missing fields may be null.
 5. **阶段产物** — set `bind.status = in_progress` at phase start; write `bind` to `tmp/entry_state.json`; proceed to `trace_dispatch`.
 
-Include the sample snippets from rr1:
+Include the sample snippets:
 
 ```c
 hdfDemoHost->ioService.Dispatch = DemoDriverDispatch;
@@ -1094,7 +1094,7 @@ Include three examples:
 2. **断点续跑** — progress phase `trace_dispatch`, cases 1-3 analyzed, case 4 in_progress; resume and finish.
 3. **service 未找到** — `/srv/ohos/drivers demo_service_typo`; report `service_not_found`, scope file count, searched pattern, suggestions.
 
-Use the exact sample names from rr1: `g_DemoDriverEntry`, `HdfDemoDriverBind`, `DemoDriverDispatch`, `IDemoInterface`, `DemoService`, `DemoInterfaceStub::OnRemoteRequest`, `DemoInterfaceStubGetVersion`.
+Use the exact sample names: `g_DemoDriverEntry`, `HdfDemoDriverBind`, `DemoDriverDispatch`, `IDemoInterface`, `DemoService`, `DemoInterfaceStub::OnRemoteRequest`, `DemoInterfaceStubGetVersion`.
 
 - [ ] **Step 7: Verify sections 九-十二**
 
