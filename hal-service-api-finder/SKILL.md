@@ -389,6 +389,99 @@ xargs -r -a "<out>/tmp/scope_roots.txt" -d '\n' grep -I -rn -F "<pattern>"
 
 ## 五、阶段一：定位服务注册点
 
+阶段一只做一件事：在 scope 内找到 `.moduleName` 与 `<service_name>` 精确相等的 `HdfDriverEntry` 初始化器，确认注册形式，写出 `entry_state.json`。本阶段不分析 Bind 内部逻辑，不进入 Dispatch。
+
+### 精确搜索
+
+按第三章“方式一”在 scope 内搜索带双引号的完整字面量 `"<service_name>"`（`<out>` 定义同第三章）：
+
+```bash
+xargs -r -a "<out>/tmp/scope_files.txt" -d '\n' grep -I -H -n -F '"<service_name>"'
+```
+
+- 只允许搜索 `scope_files.txt` 中的文件；禁止 `grep -rn <project_dir>` 或任何等价的全仓搜索。`scope_roots.txt` 非 null 时可改用第三章“方式二”，但最终仍以 `scope_files.txt` 为硬边界。
+- 每个命中都必须用 Read 读取至少 30 行上下文（`offset=max(1, 命中行-15)`，`limit` 不少于 31）；若初始化器超出该范围，继续读到闭合 `};`。不得只凭 grep 行下结论。
+- 一个命中只有同时满足以下条件才成为候选：
+  1. 命中行是 `.moduleName` 成员初始化（允许 `.moduleName=...` 等空白差异），引号内字符串与 `<service_name>` 完全相等（区分大小写，`grep -F` 已按字面量匹配）；
+  2. 向上可确认该成员位于 `HdfDriverEntry` 类型的初始化器内（声明形如 `struct HdfDriverEntry <var> = {` 或 `HdfDriverEntry <var> = {`，可带 `static`、`const` 等限定符），且 `.moduleName` 处于该初始化器的成员层级；
+  3. 命中不在注释或字符串常量中。
+- 不满足的命中（注释、日志、其他结构体字段、同名子串、非 `HdfDriverEntry` 初始化器等）丢弃，并记录文件、行号与原因，供 `service_not_found` 的 evidence 使用。
+- 每个合法初始化器形成一个候选，提取并记录：
+  - `variable`：初始化器变量名；
+  - `file`：`scope_files.txt` 中登记的绝对路径；
+  - `line`：`.moduleName` 所在行号；
+  - `module_name`：`<service_name>`；
+  - `bind` / `init` / `release`：对应成员的赋值表达式原文；成员缺失或值为 `NULL` / `nullptr` / 空时记 `null`。
+
+合法命中示例（rr1）：
+
+```c
+struct HdfDriverEntry g_ArDriverEntry = {
+    .moduleVersion = 1,
+    .moduleName = "ar_service",
+    .Bind = HdfArDriverBind,
+    .Init = HdfArDriverInit,
+    .Release = HdfArDriverRelease,
+};
+
+HDF_INIT(g_ArDriverEntry);
+```
+
+上例应提取 `variable = g_ArDriverEntry`、`bind = HdfArDriverBind`、`init = HdfArDriverInit`、`release = HdfArDriverRelease`。
+
+### 注册形式确认
+
+对每个候选的 `variable`，按第三章“方式一”在 scope 内搜索其变量名（用 `-w` 避免子串误命中）：
+
+```bash
+xargs -r -a "<out>/tmp/scope_files.txt" -d '\n' grep -I -H -n -F -w "<entry_var>"
+```
+
+对每个引用读取足够上下文（至少覆盖其所在语句或初始化器），按以下优先级判定，命中即停：
+
+1. `HDF_INIT`：找到 `HDF_INIT(<entry_var>)` 或 `HDF_INIT(&<entry_var>)`。确认括号匹配、变量一致，记录该行文件、行号，`evidence` 为语句原文。
+2. `other`：没有 `HDF_INIT`，但找到其他语义明确的注册证据（如注册表/注册数组中的条目、注册函数调用）。记录文件、行号与 `evidence`。
+3. `unverified`：以上都没有。`file`、`line`、`evidence` 均记 `null`。
+
+- 变量声明、`extern`、普通读取/赋值、注释或日志提及都不是注册证据，不得记为 `other`。
+- 记录 `entry.registration = {form, file, line, evidence}`；`form` 只能是 `HDF_INIT` / `other` / `unverified`。
+
+### 服务存在判定
+
+- 存在一个 `moduleName` 精确匹配的 `HdfDriverEntry` 初始化器，即判定服务存在。
+- 注册引用是辅助证据，不是硬门槛：`registration.form == unverified` 时仍继续写阶段产物并进入阶段二，不得因此报 `service_not_found`。
+- `.moduleName` 不匹配、或类型不是 `HdfDriverEntry` 的初始化器不算命中。
+
+### 多命中处理
+
+候选按 `(file, variable)` 去重，同一初始化器的多处文本命中只算一个候选。
+
+- 候选数为 0：按“失败处理”报 `service_not_found`。
+- 候选数为 1：直接使用该候选，无论其注册形式。
+- 候选数 ≥ 2：先对每个候选完成“注册形式确认”，再按以下规则决定：
+  - 恰好一个候选有明确注册证据（`registration.form` 为 `HDF_INIT` 或 `other`）→ 使用该候选；
+  - 有两个及以上已注册候选，或没有任何已注册候选 → 报 `multiple_matches`，列出全部候选的 `variable`、`file`、`line`、`registration.form`、`registration.evidence`，写入 `progress.error` 并停止；不得任选、不得按文件顺序猜测。
+- `unverified` 候选不计入“已注册”。
+
+### 失败处理
+
+失败一律按第四章写入 `progress.error = {code, message, evidence}`，保留 `phase = locate_entry`，不写 `entry_state.json`，不进入阶段二，停止。
+
+- `service_not_found`：没有任何合法候选。`message` 必须包含 scope 文件数（`scope_files.txt` 行数）和已搜索模式（至少 `"<service_name>"`）；`evidence` 列出被拒命中及其原因；零命中时明确写“0 命中”。
+- `bind_not_found`：已选定唯一候选，但 `.Bind` 缺失、为空或为 `NULL` / `nullptr`。`message` 与 `evidence` 记录 `entry` 变量、文件、行号及 `.Bind` 原文/缺失情况。该检查在多命中消歧之后执行；失败时不写 `entry_state.json`，下次运行因无有效状态会重跑阶段一并重新校验。
+
+### 阶段产物
+
+定位成功后：
+
+1. 按第四章 `entry_state.json` 的字段形状写入：
+   - `service_name`：当前 `<service_name>`；
+   - `scope`：原样取 `progress.scope`（无 clean_code.txt 时 `scope_roots = null`）；
+   - `entry`：本阶段提取的 `variable`、`file`、`line`、`module_name`、`bind`、`init`、`release`、`registration`；
+   - 不写 `bind` 对象，由阶段二负责。
+2. 先写 `<out>/tmp/entry_state.json.tmp`，再 `mv` 覆盖 `<out>/tmp/entry_state.json`，避免产生半截 JSON。
+3. 立即更新 `progress.json`：`phase = analyze_bind`，`locate_entry.status = completed`，`analyze_bind.status = in_progress`，`error = null`；保存后进入 `## 六、阶段二：分析 Bind`。
+
 ## 六、阶段二：分析 Bind
 
 ## 七、阶段三：cmdId 分发追踪
