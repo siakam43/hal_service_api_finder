@@ -896,6 +896,106 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 
 ## 八、输出与自检
 
+本阶段只做两件事：完成自检，然后把 `trace_state.handlers` 组装为最终 JSON 并写入磁盘。不新增分析、不展开接口函数、不修改追踪结论。
+
+### 8.1 输出 JSON
+
+最终输出：`<out>/<service_name>_api.json`。只从 `trace_state.handlers` 组装：丢弃 `definition_line` 等仅用于状态追踪的字段，每条记录仅保留以下四个字段。
+
+```json
+[
+  {
+    "cmd_id_macro": "CMD_ACTIVITY_INTERFACE_GET_VERSION",
+    "cmd_id_value": 0,
+    "interface_function": "ActivityInterfaceStubGetVersion",
+    "file": "/abs/path/activity_interface_stub.cpp"
+  }
+]
+```
+
+字段定义：
+
+| 字段 | 类型 | 规则 |
+|------|------|------|
+| `cmd_id_macro` | string | 最外层具体 case 的宏名或表达式原文；范围/掩码/组合表达式照原样 |
+| `cmd_id_value` | integer 或 null | 单一可解析值；范围/掩码/组合/无法解析时为 null |
+| `interface_function` | string | 定义处的作用域限定名；lambda 用 `<lambda@绝对路径:行号>` |
+| `file` | string | 函数定义所在文件的绝对路径，必须在 scope_files 内 |
+
+输出规则：
+
+1. 同一 cmdId 对应多个接口函数 → 多条记录。
+2. 完全相同的四元组去重。
+3. 排序：`cmd_id_value` 升序（null 最后）→ `cmd_id_macro` → `interface_function` → `file`。
+4. `default` 分支不进入最终 JSON。
+5. 服务存在但未识别到接口 → 输出 `[]`，报告 0 个接口。
+6. 不添加任何额外字段。
+7. UTF-8 编码，JSON 缩进 2 空格。
+8. 先写 `tmp/<service_name>_api.json.tmp`，Read 回读校验通过后 `mv` 为最终文件。
+9. 最终文件必须存在，否则本次任务失败。
+
+组装步骤：
+
+1. 遍历 `trace_state.handlers`，每条只取 `cmd_id_macro`、`cmd_id_value`、`interface_function`、`file`，其余字段一律丢弃。
+2. 按四元组 `(cmd_id_macro, cmd_id_value, interface_function, file)` 去重，完全相同的记录只保留一条；`cmd_id_value` 为 null 也参与比较。
+3. 按输出规则 3 排序；`cmd_id_value` 为 null 的记录排在全部整数之后，其余键按字符串升序比较。
+4. 没有记录时输出空数组 `[]`，不输出 null 或空文件。
+5. 输出规则中的 `tmp/...` 以 `<out>` 为基准，即临时文件为 `<out>/tmp/<service_name>_api.json.tmp`，最终文件为 `<out>/<service_name>_api.json`。
+
+### 8.2 自检与状态切换
+
+自检开始前将 `trace_state.status` 置为 `self_check`（阶段三收尾应已置为该值；从恢复流程进入时先确认，不一致则纠正），先以 `<out>/tmp/trace_state.json.tmp` + `mv` 原子保存，再执行以下清单：
+
+1. `queue` 为空，没有 `pending` / `in_progress` 工作项。
+2. 所有 `cases` 已 `analyzed`，或明确记录无目标/unresolved。
+3. 每个 `handlers` 条目都能在 scope_files 内定位到函数定义，且函数名为限定名。
+4. `default_cases` 没有混入 `handlers`。
+5. handlers 已按四元组去重，排序规则已执行。
+6. `unresolved` 已记录，数量与报告一致。
+7. 最终 JSON 恰好包含四个字段，无额外字段。
+8. 写临时文件后 Read 回读，核对数组长度、字段名、类型。
+9. `mv` 后双方法确认最终文件存在。
+10. 写最终 JSON 前将 `progress.phase` 置为 `output`；写成功后置为 `done`，所有阶段状态为 `completed`。
+
+执行说明：
+
+- 第 1-4、6 项检查 `trace_state` 当前内容；第 5、7 项针对 8.1 组装后的最终数组核对。
+- 第 3 项中 lambda 的 `interface_function` 以 `<lambda@绝对路径:行号>` 形式为合规；其余函数必须是定义处作用域限定名。每个条目都要按 `file` 与定义位置 Read 确认完整函数体，且 `file` 必须在 `scope_files.txt` 内。
+- 第 6 项的 unresolved 数量以 `trace_state.unresolved` 长度为准，并与完成报告一致。
+- 第 8 项回读后核对：数组长度等于去重后的记录数；每条键集合恰为四字段；`cmd_id_macro` / `interface_function` / `file` 为字符串，`cmd_id_value` 为整数或 null。
+- 第 9 项的双方法按第三章“文件存在性检查”执行（`ls` + `Read`），禁止 `test -f` / `[ -f ]`。
+
+执行顺序与状态切换：
+
+1. 阶段三收尾或恢复进入本章时，确认 `trace_state.status = self_check`，原子保存。
+2. 执行清单第 1-4、6 项。
+3. 按 8.1 组装最终数组，执行清单第 5、7 项。
+4. 第 1-7 项全部通过后：`trace_state.status = completed`，重算 counters（`queue_remaining`、`cases_total`、`handlers_total`、`unresolved_total`）并原子保存；随后设置 `progress.phase = output`、`trace_dispatch.status = completed`、`output.status = in_progress`、`error = null`，原子保存。只有 `trace_state.status == completed` 后才能置 `phase = output`。
+5. 写 `<out>/tmp/<service_name>_api.json.tmp`，执行清单第 8 项。
+6. `mv` 为最终文件，执行清单第 9 项。
+7. 执行清单第 10 项：`progress.phase = done`，`locate_entry.status`、`analyze_bind.status`、`trace_dispatch.status`、`output.status` 全部为 `completed`，`error = null`，原子保存。
+8. 按 8.3 输出完成报告。
+
+失败处理：
+
+- 清单第 1-7 项任一失败 → 按第四章写 `progress.error = {code, message, evidence}`，`trace_state.status` 保持 `self_check`，`progress.phase` 保持 `trace_dispatch`（若已进入 `output` 则保持 `output`），停止；不得写最终 JSON。
+- 清单第 8-9 项（写临时文件、回读校验、`mv`、最终文件存在性确认）任一失败 → 写 `progress.error`（`code = "output_write_failed"`，evidence 记录临时/最终路径与失败动作），保持 `phase = output` 以便重试，停止；不得把 `phase` 置为 `done`。
+- 重试 `output_write_failed` 时从 `trace_state.handlers` 重新组装（结果幂等），覆盖临时文件后重新执行回读、`mv` 与存在性确认。
+- 最终文件必须存在；无法确认存在即按 `output_write_failed` 处理，本次任务失败。
+
+### 8.3 完成报告
+
+写盘成功并确认最终文件存在后报告：
+
+- 分析范围文件数；
+- service_name、入口变量、Bind 函数、Dispatch 函数数量；
+- cmdId 用例数；
+- 接口函数数量；
+- unresolved 数量；
+- 最终输出文件绝对路径。
+
+接口函数数量以最终 JSON 数组长度为准；unresolved 数量以 `trace_state.unresolved` 长度为准；服务存在但未识别到接口时报告 0 个接口，并说明最终 JSON 为 `[]`。
+
 ## 九、权限申请
 
 ## 十、约束规则
