@@ -515,6 +515,13 @@ C++ 间接调用、虚函数、函数指针、重载等解析细节可参考 tai
 
 ## 10. 状态文件与断点恢复
 
+状态文件路径：
+- `<out>/progress.json`
+- `<out>/tmp/entry_state.json`
+- `<out>/tmp/trace_state.json`
+
+以下 JSON 为字段形状示例，不要求彼此处于同一时刻。
+
 ### 10.1 progress.json
 
 ```json
@@ -550,6 +557,9 @@ C++ 间接调用、虚函数、函数指针、重载等解析细节可参考 tai
 ```
 
 - 下次运行从当前阶段重试，重试前清空 `error`。
+- phase 是恢复的唯一权威；各阶段 `status` 仅作诊断，必须与 `phase` 同步更新。
+- `scope.file_count` 在 scope 生成后写入；恢复时与 `scope_files.txt` 的行数核对，不一致以实际文件清单为准并更新。
+- 只有 `trace_state.status == completed` 后，`phase` 才能设为 `output`；`output` 完成后才能设为 `done`。
 
 ### 10.2 entry_state.json
 
@@ -617,12 +627,14 @@ C++ 间接调用、虚函数、函数指针、重载等解析细节可参考 tai
 - `bind.status`：`pending` / `in_progress` / `completed`。
 - `stub` 可以为 `null`。
 - 阶段二可重复执行（幂等）：中断后重跑并覆盖，不影响后续。
+- 恢复时校验 `entry_state.service_name` 与当前 `service_name` 一致；不一致视为状态损坏，报 `state_io_error` 并停止，不混用旧状态。
 
 ### 10.3 trace_state.json
 
 ```json
 {
   "status": "in_progress",
+  "service_name": "ar_service",
   "entry_dispatchers": [
     {"name": "ArDriverDispatch", "file": "/abs/path/...", "line": 129}
   ],
@@ -679,7 +691,7 @@ C++ 间接调用、虚函数、函数指针、重载等解析细节可参考 tai
   "dispatch_cache": [],
   "visited": [],
   "counters": {
-    "queue_remaining": 0,
+    "queue_remaining": 1,
     "cases_total": 1,
     "handlers_total": 1,
     "unresolved_total": 0
@@ -694,34 +706,42 @@ C++ 间接调用、虚函数、函数指针、重载等解析细节可参考 tai
 - `visited` 条目包含函数定义信息和 cmd 上下文。
 - `dispatch_cache` 条目包含 `site`、`target`、`candidates`、`resolved`。
 - `counters` 用于恢复时的自洽检查。
+- `queue` 只保存在处理中的工作项：处理前将该项置为 `in_progress`，处理完从 `queue` 移除；`queue_remaining` 必须等于 `queue` 的长度。
+- cmdId 用例状态为 `pending` / `analyzed`；`default` 分支单独记入 `default_cases`。
+- `trace_state.status` 含义：`in_progress` → 继续追踪；`self_check` → 完成或重做自检；`completed` → 可组装输出。
+- `trace_state 完整` 的定义：`status == completed` 且 `queue` 为空，且 `counters` 与实际数组长度一致。
+- 恢复时校验 `trace_state.service_name` 与当前 `service_name` 一致；不一致视为状态损坏，报 `state_io_error` 并停止。
 
 ### 10.4 恢复流程
 
-1. 双方法检查 `progress.json`：
-   - 不存在 → 全新分析。
-   - 存在 → 继续。
-2. 校验 `project_dir` 和 `service_name` 与当前调用一致；不一致 → 报错 `state_conflict`，停止，不删除旧状态。
-3. `phase = done` → 双方法确认最终输出存在：
+1. 双方法检查 progress.json：不存在 → 全新分析；存在 → 继续。
+2. 校验 project_dir 和 service_name 与当前调用一致；不一致 → 报错 state_conflict，停止，不删除旧状态。
+3. phase = done → 双方法确认最终输出存在：
    - 存在 → 报告完成，停止；
    - 不存在且 trace_state 完整 → 从 trace_state 重新组装输出；
-   - 不存在且 trace_state 不完整 → 回到 `trace_dispatch` 继续分析。
+   - 不存在且 trace_state 不完整 → 回到 trace_dispatch，按 trace_state.status 继续。
 4. 按 phase 恢复：
-   - `locate_entry`：entry_state 已有匹配 entry → 跳到 `analyze_bind`；否则重跑阶段一。
-   - `analyze_bind`：bind 已完成且 `dispatch_functions` 非空 → 跳到 `trace_dispatch`；否则重跑阶段二。
-   - `trace_dispatch`：trace_state 存在 → 将 `in_progress` 工作项置回 `pending`，从第一个待处理项继续；跳过已 `analyzed` 的用例；queue 空 → 进入自检。trace_state 缺失 → 从 entry_state 重新初始化队列，重跑阶段三。
-   - `output`：跳过分析，直接从 trace_state 组装输出；成功后置 `done`。
-5. 加载后对照 `counters` 与实际数组长度；不一致以实际内容为准，不清空、不猜测性修复。
+   - locate_entry：entry_state 已有匹配 entry → 跳到 analyze_bind；entry_state 缺失/损坏/无匹配 entry → 重跑阶段一。
+   - analyze_bind：entry_state 有效且 bind.status == completed 且 dispatch_functions 非空 → 跳到 trace_dispatch；entry_state 缺失/损坏/无 entry → 回到 locate_entry；否则重跑阶段二。
+   - trace_dispatch：trace_state 存在且 service_name 匹配 → 按 status 处理：
+       in_progress → 将 in_progress 工作项置回 pending，从第一个待处理项继续；跳过已 analyzed 的用例；queue 空 → 进入自检；
+       self_check → 完成或重做自检（见第八章）；
+       completed → 进入 output；
+     trace_state 缺失/损坏 → entry_state 有效则从 entry_state 重新初始化队列，否则回到 locate_entry。
+   - output：trace_state.status == completed 才组装输出；status == self_check → 先完成自检；status == in_progress 或 trace_state 缺失 → 回到 trace_dispatch。成功后置 done。
+5. 加载后对照 counters 与实际数组长度；不一致以实际内容为准，不清空、不猜测性修复。
 6. 关键文件存在性一律双方法确认；结果无法判断 → 停止并报告。
-7. 状态文件采用“先写 `.tmp` 再 `mv`”的方式覆盖，避免中断产生半截 JSON。
-8. 存在与当前 `project_dir`/`service_name` 匹配的 `progress.json` 时，按恢复流程继续，不重新生成 scope 或 scope 文件；只有全新分析才重新执行第 5 章的范围构建，除非恢复步骤明确要求重建。
+7. 状态文件采用“先写 .tmp 再 mv”的方式覆盖，避免中断产生半截 JSON。
+8. 状态文件 JSON 解析失败 → 报 state_io_error 并停止，不自动清空。
+9. 存在与当前 project_dir/service_name 匹配的 progress.json 时，按恢复流程继续，不重新生成 scope 或 scope 文件；只有全新分析才重建 scope，除非恢复步骤明确要求重建。若 progress.json 匹配但 scope_files.txt 缺失，重建 scope 并更新 progress.scope。无 clean_code.txt 时 scope_roots = null，旧的 scope_roots.txt 删除或忽略。
 
 ### 10.5 全新分析与旧输出
 
-- `progress.json` 不存在 → 视为全新分析；最终输出在完成时原子覆盖。
-- `progress.json` 存在但 phase 未完成 → 严格按恢复流程继续，不从头重跑。
-- 用户若要强制全新分析，删除 `progress.json` 与 `tmp/`；最终输出会在完成时覆盖。
-- 完成态 state 保留，不删除，支持“输出丢失后补做输出”和问题诊断。
-- 恢复或新分析中若 `scope_roots = null`（无 clean_code.txt），旧的 `tmp/scope_roots.txt` 必须删除或忽略，禁止据此按根目录搜索。
+- progress.json 不存在 → 全新分析；开始时若同 service 的旧输出存在，先重命名为 `<service_name>_api.json.bak`，完成时再原子覆盖最终文件。
+- progress.json 存在但 phase 未完成 → 严格按恢复流程继续，不从头重跑。
+- 强制全新分析：删除 progress.json 与 tmp/。
+- 完成态 state 保留，不删除。
+- 同一 project_dir 同时只保留一个 service 的状态；分析另一个 service 前，先归档或删除旧 progress.json 与 tmp/。
 
 ## 11. 错误处理
 
