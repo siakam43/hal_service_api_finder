@@ -509,7 +509,7 @@ Replace the old `### 阶段产物` content (from `提取成功后，按第四章
 ```
 
 - `bind` 对象字段沿用原定义（`function` / `file` / `line` / `host_type` / `dispatch_functions` / `stub` / `service_registration`），不写 `status`。
-- 直接写 `<out>/02_bind.json`；写入失败 → 写 `error.json`（`phase = "analyze_bind"`，`code = "snapshot_write_failed"`），停止。
+- 直接写 `<out>/02_bind.json`；写入失败 → 删除可能残留的 `<out>/02_bind.json`，再写 `error.json`（`phase = "analyze_bind"`，`code = "snapshot_write_failed"`），停止。
 - 进入 `## 七、阶段三：cmdId 分发追踪`。
 ````
 
@@ -527,7 +527,21 @@ with:
 - 任一失败码一律写 `error.json`（`phase = "analyze_bind"`），不写 `02_bind.json`，不进入阶段三，停止。
 ```
 
-- [ ] **Step 5: Verify Task 4**
+- [ ] **Step 5: Update the `dispatch_not_found` bullet**
+
+Also replace in the `dispatch_not_found` bullet:
+
+```text
+报 `dispatch_not_found`，保留 `phase = analyze_bind`，停止。
+```
+
+with:
+
+```text
+报 `dispatch_not_found`，停止。
+```
+
+- [ ] **Step 6: Verify Task 4**
 
 ```bash
 sed -n '/^## 六、/,/^## 七、/p' hal-service-api-finder/SKILL.md | grep -n 'progress\|entry_state\|trace_state\|bind.status\|phase = analyze_bind' || echo 'no old state references in section 6'
@@ -536,7 +550,7 @@ grep -n '02_bind.json' hal-service-api-finder/SKILL.md
 
 Expected: no old state references except the new `error.json` phase label; `02_bind.json` present.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add hal-service-api-finder/SKILL.md

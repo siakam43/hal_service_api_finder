@@ -409,11 +409,11 @@ HDF_INIT(g_DemoDriverEntry);
 
 ## 六、阶段二：分析 Bind
 
-阶段二只做一件事：在 scope 内定位 `entry.bind` 指向的 Bind 函数定义，提取 Host 类型、全部 Dispatch 函数、可选的 stub/接口/实现类信息与服务注册证据，写出 `entry_state.bind` 后进入阶段三。本阶段不做 cmdId 追踪，不展开业务函数。
+阶段二只做一件事：在 scope 内定位 `entry.bind` 指向的 Bind 函数定义，提取 Host 类型、全部 Dispatch 函数、可选的 stub/接口/实现类信息与服务注册证据，写出 `02_bind.json` 后进入阶段三。本阶段不做 cmdId 追踪，不展开业务函数。
 
 ### 定位 Bind 定义
 
-输入：`entry_state.entry.bind`、`entry.file`（阶段一已确认 `.Bind` 非空）。
+输入：`01_entry.json` 的 `entry.bind`、`entry.file`（阶段一已确认 `.Bind` 非空）。
 
 1. 归一化 `.Bind` 取值：
    - 去掉首尾空白、取地址符 `&` 和强制类型转换（如 `(int32_t (*)(struct HdfDeviceObject *))HdfDemoDriverBind`），得到待解析标识符。
@@ -461,7 +461,7 @@ Host 实例的创建形式都要识别：
 - 用 Read 读取完整语句或初始化器以及所在函数上下文，确认赋给的是本 Bind 识别出的 host 实例，且不在注释/字符串中。
 - 记录全部 Dispatch 函数：`name` 为函数名（宏/包装同样展开到真实函数），`file`/`line` 为函数定义所在文件与签名行（用与 Bind 相同的“搜索 + 完整函数体”方法在 scope 内确认），`via` 记赋值左侧表达式原文（如 `hdfDemoHost->ioService.Dispatch`）；经初始化函数间接发现时写 `<初始化函数名>: <左侧表达式>`。
 - 按 `(name, file, line)` 去重；同一函数有多处赋值时，`via` 用 `;` 连接全部赋值左侧表达式。
-- Dispatch 函数定义不在 scope 内时，`file`/`line` 记 null，`via` 记 `<赋值文件>:<赋值行> <左侧表达式>`，不丢弃该函数。阶段三初始化队列时跳过 file 为 null 的 Dispatch 条目并记入 `trace_state.unresolved`（`kind = "definition"`）；若所有 Dispatch 条目都被跳过且 `bind.stub.on_remote_request` 非 null，则直接用该 OnRemoteRequest 初始化工作项。
+- Dispatch 函数定义不在 scope 内时，`file`/`line` 记 null，`via` 记 `<赋值文件>:<赋值行> <左侧表达式>`，不丢弃该函数。阶段三初始化队列时跳过 file 为 null 的 Dispatch 条目并记入 `03_trace.json` 的 `unresolved`（`kind = "definition"`）；若所有 Dispatch 条目都被跳过且 `bind.stub.on_remote_request` 非 null，则直接用该 OnRemoteRequest 初始化工作项。
 
 Bind 函数体内没有 Dispatch 赋值时，按以下顺序继续，不得因 Bind 内没有赋值就判定失败：
 
@@ -470,7 +470,7 @@ Bind 函数体内没有 Dispatch 赋值时，按以下顺序继续，不得因 B
 3. 按「正则/词边界搜索」在 scope 内查找 Dispatch 赋值 `(\.|->)Dispatch[[:space:]]*=` 与 host 标识 `<host_var>`；其中 `<host_var>` 替换为实际变量名，可再用 host 类型名补充搜索。
 4. 对每个命中读取上下文，只保留作用于同一 host 实例（直接或经指针传递）的赋值。
 
-以上步骤完成后仍未找到任何 Dispatch 赋值 → 报 `dispatch_not_found`，保留 `phase = analyze_bind`，停止。
+以上步骤完成后仍未找到任何 Dispatch 赋值 → 报 `dispatch_not_found`，停止。
 
 ### 提取 stub、接口与实现类（可选）
 
@@ -515,53 +515,45 @@ deviceObject->service = &hdfDemoHost->ioService;
 
 ### 阶段产物
 
-提取成功后，按第四章 `entry_state.json` 的字段形状写入 `bind`；只新增/覆盖 `bind`，保留 `service_name`、`scope`、`entry` 不变：
+提取成功后，组装并写 `02_bind.json`：
 
-```text
-"bind": {
-  "status": "completed",
-  "function": "<真实 Bind 函数名>",
-  "file": "<scope 内绝对路径>",
-  "line": 72,
-  "host_type": "HdfDemoHost",
-  "dispatch_functions": [
-    {
-      "name": "DemoDriverDispatch",
-      "file": "<scope 内绝对路径>",
-      "line": 129,
-      "via": "hdfDemoHost->ioService.Dispatch"
-    }
-  ],
-  "stub": {
-    "member": "stub",
-    "interface_type": "IDemoInterface",
-    "impl_class": "DemoService",
-    "impl_file": "<scope 内绝对路径或 null>",
-    "stub_class": "DemoInterfaceStub",
-    "on_remote_request": {
-      "name": "<Stub 作用域限定名>::OnRemoteRequest",
-      "file": "<scope 内绝对路径>",
-      "line": 160
-    },
-    "evidence": "hdfDemoHost->stub = ...GetOrNewObject(serviceImpl, IDemoInterface::GetDescriptor())"
+```json
+{
+  "service_name": "demo_service",
+  "entry": {
+    "variable": "g_DemoDriverEntry",
+    "file": "/abs/path/...",
+    "module_name": "demo_service"
   },
-  "service_registration": {
-    "file": "<scope 内绝对路径或 null>",
-    "line": 110,
-    "evidence": "deviceObject->service = &hdfDemoHost->ioService"
+  "bind": {
+    "function": "HdfDemoDriverBind",
+    "file": "/abs/path/...",
+    "line": 72,
+    "host_type": "HdfDemoHost",
+    "dispatch_functions": [
+      {"name": "DemoDriverDispatch", "file": "/abs/path/...", "line": 129, "via": "hdfDemoHost->ioService.Dispatch"}
+    ],
+    "stub": {
+      "member": "stub",
+      "interface_type": "IDemoInterface",
+      "impl_class": "DemoService",
+      "impl_file": "/abs/path/...",
+      "stub_class": "DemoInterfaceStub",
+      "on_remote_request": {"name": "OHOS::HDI::Demo::V1_0::DemoInterfaceStub::OnRemoteRequest", "file": "/abs/path/...", "line": 160},
+      "evidence": "hdfDemoHost->stub = ...GetOrNewObject(serviceImpl, IDemoInterface::GetDescriptor())"
+    },
+    "service_registration": {"file": "/abs/path/...", "line": 110, "evidence": "deviceObject->service = &hdfDemoHost->ioService"}
   }
 }
 ```
 
-- 阶段开始时若已有 bind 对象，必须先将 `bind.status` 置为 `in_progress`；只有全部必需字段提取成功后写 `completed`；失败时保持 `in_progress`，不得保留旧的 `completed`。
-- `dispatch_functions` 至少一项，已按 `(name, file, line)` 去重。
-- `stub` 可为 null；`on_remote_request` 可为 null。
-- 先写 `<out>/tmp/entry_state.json.tmp`，再 `mv` 覆盖 `<out>/tmp/entry_state.json`，避免半截 JSON；重跑本阶段时整体覆盖。
-- 写入成功后立即更新 `progress.json`：`phase = trace_dispatch`，`analyze_bind.status = completed`，`trace_dispatch.status = in_progress`，`error = null`；保存后进入 `## 七、阶段三：cmdId 分发追踪`。
+- `bind` 对象字段沿用原定义（`function` / `file` / `line` / `host_type` / `dispatch_functions` / `stub` / `service_registration`），不写 `status`。
+- 直接写 `<out>/02_bind.json`；写入失败 → 删除可能残留的 `<out>/02_bind.json`，再写 `error.json`（`phase = "analyze_bind"`，`code = "snapshot_write_failed"`），停止。
+- 进入 `## 七、阶段三：cmdId 分发追踪`。
 
 失败处理：
 
-- 任一失败码一律按第四章写 `progress.error = {code, message, evidence}`，保持 `phase = analyze_bind`，不写 `bind.status = completed`，不进入阶段三；下次运行从本阶段开头重跑（本阶段幂等）。
+- 任一失败码一律写 `error.json`（`phase = "analyze_bind"`），不写 `02_bind.json`，不进入阶段三，停止。
 - `bind_definition_not_found`：宏/包装无法展开，或展开后 scope 内没有带完整函数体的定义。message 记录搜索名与 scope 文件数；evidence 列出展开链、被拒命中及原因。
 - `bind_ambiguous`：存在多个可选定义且无法按同文件/签名规则唯一确定。evidence 列出全部候选的 `name`、`file`、`line`、签名。
 - `dispatch_not_found`：Bind 体内、跟随的初始化函数中以及 scope 搜索均未发现 Dispatch 赋值。evidence 记录 host 变量/类型、已跟随的函数、搜索模式与命中处理结果。
