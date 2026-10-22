@@ -26,7 +26,7 @@ HdfDriverEntry.moduleName 精确定位
 | 用词 | 含义 |
 |------|------|
 | 服务注册点 | 通过 moduleName 精确定位到的 `HdfDriverEntry` 定义及其注册引用 |
-| 服务入口变量 | `HdfDriverEntry` 类型的变量，如 `g_ArDriverEntry` |
+| 服务入口变量 | `HdfDriverEntry` 类型的变量，如 `g_DemoDriverEntry` |
 | Bind 函数 | 入口结构体 `.Bind` 字段指向的函数 |
 | Dispatch 函数 | Bind 阶段链接到 Host 的 `ioService.Dispatch`（或等价成员）的函数 |
 | 分发函数 | 根据 cmdId 选择处理路径的函数，包括 Dispatch、转发器、OnRemoteRequest、内层分发函数 |
@@ -65,7 +65,7 @@ HdfDriverEntry.moduleName 精确定位
 ```
 
 - 输出目录不存在时用 `mkdir -p` 创建；创建失败则报告并结束。
-- 最终文件名固定为 `<service_name>_api.json`，例如 `ar_service_api.json`。
+- 最终文件名固定为 `<service_name>_api.json`，例如 `demo_service_api.json`。
 - 不生成 summary 报告；调试信息全部保存在中间结果中。
 
 ### 3.3 交付物
@@ -205,18 +205,18 @@ find <project_dir> -type f \( -name "*.c" -o -name "*.h" -o -name "*.cpp" -o -na
 2. 判断是否位于 `HdfDriverEntry` 类型的初始化中：
 
 ```c
-struct HdfDriverEntry g_ArDriverEntry = {
+struct HdfDriverEntry g_DemoDriverEntry = {
     .moduleVersion = 1,
-    .moduleName = "ar_service",
-    .Bind = HdfArDriverBind,
-    .Init = HdfArDriverInit,
-    .Release = HdfArDriverRelease,
+    .moduleName = "demo_service",
+    .Bind = HdfDemoDriverBind,
+    .Init = HdfDemoDriverInit,
+    .Release = HdfDemoDriverRelease,
 };
 ```
 
 3. 只接受 `.moduleName` 字段与 service_name 完全相等（区分大小写）的初始化。
 4. 提取：
-   - 入口变量名（如 `g_ArDriverEntry`）；
+   - 入口变量名（如 `g_DemoDriverEntry`）；
    - 定义文件绝对路径、初始化器声明起始行号；
    - `.moduleName`、`.Bind`、`.Init`、`.Release` 的值；
    - 结构体中其他与注册相关的字段（仅记录）。
@@ -228,7 +228,7 @@ struct HdfDriverEntry g_ArDriverEntry = {
 首选形式：
 
 ```c
-HDF_INIT(g_ArDriverEntry);
+HDF_INIT(g_DemoDriverEntry);
 ```
 
 - 在 scope 内搜索 `HDF_INIT(<入口变量>)`（允许空白差异，也检查 `HDF_INIT(&<入口变量>)`）。
@@ -311,14 +311,14 @@ host->Dispatch = X;              // Host 直接内嵌 IDeviceIoService 时
 
 1. 查找 Host 中名称包含 `stub`（不区分大小写）的成员赋值，或明显的 stub 类型成员赋值。
 2. 追踪赋值表达式：
-   - `GetOrNewObject(serviceImpl, IActivityInterface::GetDescriptor())`；
+   - `GetOrNewObject(serviceImpl, IDemoInterface::GetDescriptor())`；
    - `new XxxStub(...)`；
    - 其他工厂函数/注册函数。
 3. 记录：
    - stub 成员名；
-   - 接口类型（如 `IActivityInterface`）；
-   - 实现类（如 `ArService`）及创建位置（必须有类体，不能只是前置声明）；
-   - stub 类（如 `ActivityInterfaceStub`）。搜索 `<interface_type>Stub` 以及去掉接口名前导 `I` 后的 `<StubName>`，用 `OnRemoteRequest` 交叉确认。
+   - 接口类型（如 `IDemoInterface`）；
+   - 实现类（如 `DemoService`）及创建位置（必须有类体，不能只是前置声明）；
+   - stub 类（如 `DemoInterfaceStub`）。搜索 `<interface_type>Stub` 以及去掉接口名前导 `I` 后的 `<StubName>`，用 `OnRemoteRequest` 交叉确认。
 4. 定位 `OnRemoteRequest`：
    - 由接口类型推导 stub 类，搜索 `<StubClass>::OnRemoteRequest` 定义；
    - 或搜索实现类/接口相关类中的 `OnRemoteRequest`；
@@ -502,10 +502,10 @@ C++ 间接调用、虚函数、函数指针、重载等解析细节可参考 tai
 ```json
 [
   {
-    "cmd_id_macro": "CMD_ACTIVITY_INTERFACE_GET_VERSION",
+    "cmd_id_macro": "CMD_DEMO_INTERFACE_GET_VERSION",
     "cmd_id_value": 0,
-    "interface_function": "ActivityInterfaceStubGetVersion",
-    "file": "/abs/path/activity_interface_stub.cpp"
+    "interface_function": "DemoInterfaceStubGetVersion",
+    "file": "/abs/path/demo_interface_stub.cpp"
   }
 ]
 ```
@@ -547,7 +547,7 @@ C++ 间接调用、虚函数、函数指针、重载等解析细节可参考 tai
 ```json
 {
   "phase": "locate_entry",
-  "service_name": "ar_service",
+  "service_name": "demo_service",
   "project_dir": "/abs/path",
   "scope": {
     "file_count": 0,
@@ -586,7 +586,7 @@ C++ 间接调用、虚函数、函数指针、重载等解析细节可参考 tai
 
 ```json
 {
-  "service_name": "ar_service",
+  "service_name": "demo_service",
   "scope": {
     "file_count": 123,
     "clean_code": true,
@@ -594,51 +594,51 @@ C++ 间接调用、虚函数、函数指针、重载等解析细节可参考 tai
     "scope_roots": "tmp/scope_roots.txt"
   },
   "entry": {
-    "variable": "g_ArDriverEntry",
+    "variable": "g_DemoDriverEntry",
     "file": "/abs/path/...",
     "line": 39,
-    "module_name": "ar_service",
-    "bind": "HdfArDriverBind",
-    "init": "HdfArDriverInit",
-    "release": "HdfArDriverRelease",
+    "module_name": "demo_service",
+    "bind": "HdfDemoDriverBind",
+    "init": "HdfDemoDriverInit",
+    "release": "HdfDemoDriverRelease",
     "registration": {
       "form": "HDF_INIT",
       "file": "/abs/path/...",
       "line": 50,
-      "evidence": "HDF_INIT(g_ArDriverEntry)"
+      "evidence": "HDF_INIT(g_DemoDriverEntry)"
     }
   },
   "bind": {
     "status": "completed",
-    "function": "HdfArDriverBind",
+    "function": "HdfDemoDriverBind",
     "file": "/abs/path/...",
     "line": 72,
-    "host_type": "HdfArHost",
+    "host_type": "HdfDemoHost",
     "dispatch_functions": [
       {
-        "name": "ArDriverDispatch",
+        "name": "DemoDriverDispatch",
         "file": "/abs/path/...",
         "line": 129,
-        "via": "hdfArHost->ioService.Dispatch"
+        "via": "hdfDemoHost->ioService.Dispatch"
       }
     ],
     "stub": {
       "member": "stub",
-      "interface_type": "IActivityInterface",
-      "impl_class": "ArService",
+      "interface_type": "IDemoInterface",
+      "impl_class": "DemoService",
       "impl_file": "/abs/path/...",
-      "stub_class": "ActivityInterfaceStub",
+      "stub_class": "DemoInterfaceStub",
       "on_remote_request": {
-        "name": "OHOS::HDI::ActivityRecognition::V1_0::ActivityInterfaceStub::OnRemoteRequest",
+        "name": "OHOS::HDI::Demo::V1_0::DemoInterfaceStub::OnRemoteRequest",
         "file": "/abs/path/...",
         "line": 160
       },
-      "evidence": "hdfArHost->stub = ...GetOrNewObject(serviceImpl, IActivityInterface::GetDescriptor())"
+      "evidence": "hdfDemoHost->stub = ...GetOrNewObject(serviceImpl, IDemoInterface::GetDescriptor())"
     },
     "service_registration": {
       "file": "/abs/path/...",
       "line": 110,
-      "evidence": "deviceObject->service = &hdfArHost->ioService"
+      "evidence": "deviceObject->service = &hdfDemoHost->ioService"
     }
   }
 }
@@ -655,14 +655,14 @@ C++ 间接调用、虚函数、函数指针、重载等解析细节可参考 tai
 ```json
 {
   "status": "in_progress",
-  "service_name": "ar_service",
+  "service_name": "demo_service",
   "entry_dispatchers": [
-    {"name": "ArDriverDispatch", "file": "/abs/path/...", "line": 129}
+    {"name": "DemoDriverDispatch", "file": "/abs/path/...", "line": 129}
   ],
   "queue": [
     {
       "id": 1,
-      "dispatcher": "ArDriverDispatch",
+      "dispatcher": "DemoDriverDispatch",
       "dispatcher_file": "/abs/path/...",
       "dispatcher_line": 129,
       "current_cmd_expr": "cmdId",
@@ -672,39 +672,39 @@ C++ 间接调用、虚函数、函数指针、重载等解析细节可参考 tai
       "data_vars": ["data"],
       "data_derived": true,
       "parent_case_id": null,
-      "path": ["ArDriverDispatch"],
+      "path": ["DemoDriverDispatch"],
       "status": "pending"
     }
   ],
   "cases": [
     {
       "id": 1,
-      "dispatcher": "OHOS::HDI::ActivityRecognition::V1_0::ActivityInterfaceStub::OnRemoteRequest",
+      "dispatcher": "OHOS::HDI::Demo::V1_0::DemoInterfaceStub::OnRemoteRequest",
       "dispatcher_file": "/abs/path/...",
       "dispatcher_line": 160,
       "dispatch_site": {"file": "/abs/path/...", "line": 163},
       "level": 2,
-      "case_expr": "CMD_ACTIVITY_INTERFACE_GET_VERSION",
+      "case_expr": "CMD_DEMO_INTERFACE_GET_VERSION",
       "case_value": 0,
-      "outer_cmd_expr": "CMD_ACTIVITY_INTERFACE_GET_VERSION",
+      "outer_cmd_expr": "CMD_DEMO_INTERFACE_GET_VERSION",
       "outer_cmd_value": 0,
       "parent_case_id": null,
       "status": "analyzed",
       "handlers": [
         {
-          "name": "ActivityInterfaceStubGetVersion",
+          "name": "DemoInterfaceStubGetVersion",
           "file": "/abs/path/...",
           "line": 1200
         }
       ],
-      "evidence": "case CMD_ACTIVITY_INTERFACE_GET_VERSION: return ActivityInterfaceStubGetVersion(data, reply, option);"
+      "evidence": "case CMD_DEMO_INTERFACE_GET_VERSION: return DemoInterfaceStubGetVersion(data, reply, option);"
     }
   ],
   "handlers": [
     {
-      "cmd_id_macro": "CMD_ACTIVITY_INTERFACE_GET_VERSION",
+      "cmd_id_macro": "CMD_DEMO_INTERFACE_GET_VERSION",
       "cmd_id_value": 0,
-      "interface_function": "ActivityInterfaceStubGetVersion",
+      "interface_function": "DemoInterfaceStubGetVersion",
       "file": "/abs/path/...",
       "definition_line": 1200
     }
@@ -912,26 +912,26 @@ description: 当用户调用 /hal-service-api-finder <project_dir> <service_name
 
 按用户选择，不运行真实代码，交付前做静态走查：
 
-### 14.1 ar_service 样例走查
+### 14.1 demo_service 样例走查
 
 使用 rr1.txt 中的样例：
 
-1. 搜索 `"ar_service"` → 命中 `g_ArDriverEntry` 的 `.moduleName`。
-2. 读取初始化 → `.Bind = HdfArDriverBind`，`.Init = HdfArDriverInit`，`.Release = HdfArDriverRelease`。
-3. 搜索 `HDF_INIT(g_ArDriverEntry)` → 命中。
+1. 搜索 `"demo_service"` → 命中 `g_DemoDriverEntry` 的 `.moduleName`。
+2. 读取初始化 → `.Bind = HdfDemoDriverBind`，`.Init = HdfDemoDriverInit`，`.Release = HdfDemoDriverRelease`。
+3. 搜索 `HDF_INIT(g_DemoDriverEntry)` → 命中。
 4. 阅读 Bind：
-   - Host 类型 `HdfArHost`；
-   - `hdfArHost->ioService.Dispatch = ArDriverDispatch`；
-   - `hdfArHost->stub = GetOrNewObject(serviceImpl, IActivityInterface::GetDescriptor())`；
-   - 实现类 `ArService`；
-   - `deviceObject->service = &hdfArHost->ioService`。
-5. 追踪 `ArDriverDispatch`：
-   - 无 switch，直接 `hdfArHost->stub->SendRequest(cmdId, *dataParcel, *replyParcel, option)`；
-   - 解析到 `ActivityInterfaceStub::OnRemoteRequest`；
+   - Host 类型 `HdfDemoHost`；
+   - `hdfDemoHost->ioService.Dispatch = DemoDriverDispatch`；
+   - `hdfDemoHost->stub = GetOrNewObject(serviceImpl, IDemoInterface::GetDescriptor())`；
+   - 实现类 `DemoService`；
+   - `deviceObject->service = &hdfDemoHost->ioService`。
+5. 追踪 `DemoDriverDispatch`：
+   - 无 switch，直接 `hdfDemoHost->stub->SendRequest(cmdId, *dataParcel, *replyParcel, option)`；
+   - 解析到 `DemoInterfaceStub::OnRemoteRequest`；
    - 外层仍为空，OnRemoteRequest 的 switch case 成为外层 cmd。
 6. 遍历 switch：
    - 8 个具名 case；
-   - 每个 case 调用的 `ActivityInterfaceStub*` 函数记为接口函数；
+   - 每个 case 调用的 `DemoInterfaceStub*` 函数记为接口函数；
    - default 分支进 default_cases。
 7. 最终输出 8 条记录。示例只展示 GET_VERSION 的值 0；其余值按实际头文件解析。
 
@@ -976,49 +976,49 @@ description: 当用户调用 /hal-service-api-finder <project_dir> <service_name
 ### 15.1 首次分析
 
 ```text
-用户：/hal-service-api-finder /srv/ohos/drivers ar_service
+用户：/hal-service-api-finder /srv/ohos/drivers demo_service
 
 Agent：
   [初始化] 分析范围：scope_files.txt 共 127 个文件；macro.json 存在，按需查阅。
-  [阶段一] 定位 moduleName="ar_service" → g_ArDriverEntry；
-           HDF_INIT(g_ArDriverEntry) 确认；
-           提取 Bind=HdfArDriverBind。
-  [阶段二] 分析 HdfArDriverBind：
-           Host=HdfArHost，Dispatch=ArDriverDispatch；
-           实现类=ArService，接口=IActivityInterface。
-  [阶段三] 追踪 ArDriverDispatch → SendRequest → ActivityInterfaceStub::OnRemoteRequest；
+  [阶段一] 定位 moduleName="demo_service" → g_DemoDriverEntry；
+           HDF_INIT(g_DemoDriverEntry) 确认；
+           提取 Bind=HdfDemoDriverBind。
+  [阶段二] 分析 HdfDemoDriverBind：
+           Host=HdfDemoHost，Dispatch=DemoDriverDispatch；
+           实现类=DemoService，接口=IDemoInterface。
+  [阶段三] 追踪 DemoDriverDispatch → SendRequest → DemoInterfaceStub::OnRemoteRequest；
            发现 8 个 cmdId 用例，8 个接口函数；
            default 分支仅记录。
   [自检] queue 空、8 条记录、无 unresolved。
-  [输出] ar_service_api.json 已生成。
+  [输出] demo_service_api.json 已生成。
 
 报告：
   范围 127 个文件 | cmdId 用例 8 个 | 接口函数 8 个 | unresolved 0 个
-  输出：/srv/ohos/drivers/.ethunter_out/hal-service-api-finder/ar_service_api.json
+  输出：/srv/ohos/drivers/.ethunter_out/hal-service-api-finder/demo_service_api.json
 ```
 
 ### 15.2 断点续跑
 
 ```text
-用户：/hal-service-api-finder /srv/ohos/drivers ar_service
+用户：/hal-service-api-finder /srv/ohos/drivers demo_service
 
 Agent：
   [恢复检查] progress.json 存在，phase=trace_dispatch；
              trace_state 中用例 1-3 已 analyzed，用例 4 为 in_progress。
   [继续] 重做用例 4，继续用例 5-8。
   [自检] 通过。
-  [输出] ar_service_api.json 已生成。
+  [输出] demo_service_api.json 已生成。
 ```
 
 ### 15.3 service 未找到
 
 ```text
-用户：/hal-service-api-finder /srv/ohos/drivers ar_service_typo
+用户：/hal-service-api-finder /srv/ohos/drivers demo_service_typo
 
 Agent：
-  [阶段一] 在 scope_files 的 127 个文件中精确搜索 "ar_service_typo"，无命中。
+  [阶段一] 在 scope_files 的 127 个文件中精确搜索 "demo_service_typo"，无命中。
   [退出] service_not_found：
-         未找到 moduleName="ar_service_typo" 的 HdfDriverEntry。
+         未找到 moduleName="demo_service_typo" 的 HdfDriverEntry。
          请检查 service_name 拼写，或确认 clean_code.txt 是否包含入口文件。
 ```
 

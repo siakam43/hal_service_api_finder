@@ -6,7 +6,7 @@
 
 **Architecture:** A single Chinese prompt document organized as a four-phase state machine: `locate_entry → analyze_bind → trace_dispatch → output`. State persists in `progress.json`, `tmp/entry_state.json`, and `tmp/trace_state.json` for resume. All analysis is done by the main agent; there are no scripts and no sub-agents.
 
-**Tech Stack:** Markdown only. Verification is static: grep checks, JSON-block parsing, and a manual walkthrough of the rr1 `ar_service` sample. No runtime tests.
+**Tech Stack:** Markdown only. Verification is static: grep checks, JSON-block parsing, and a manual walkthrough of the rr1 `demo_service` sample. No runtime tests.
 
 ---
 
@@ -16,7 +16,7 @@ The deliverable is a prompt document, not executable code. Each task ends with e
 
 1. **Structure checks:** `grep` for required headings, field names, error codes, and forbidden instructions.
 2. **JSON checks:** extract every fenced `json` block from `SKILL.md` and parse it with Python's `json` module.
-3. **Final walkthrough:** manually trace the `ar_service` sample from rr1.txt through the prompt text and confirm every step has an actionable instruction.
+3. **Final walkthrough:** manually trace the `demo_service` sample from rr1.txt through the prompt text and confirm every step has an actionable instruction.
 
 Use these commands from the repository root:
 
@@ -376,7 +376,7 @@ Include this exact JSON block under a `### progress.json` heading:
 ```json
 {
   "phase": "locate_entry",
-  "service_name": "ar_service",
+  "service_name": "demo_service",
   "project_dir": "/abs/path",
   "scope": {
     "file_count": 0,
@@ -410,7 +410,7 @@ Include this exact JSON block under a `### entry_state.json` heading:
 
 ```json
 {
-  "service_name": "ar_service",
+  "service_name": "demo_service",
   "scope": {
     "file_count": 123,
     "clean_code": true,
@@ -418,51 +418,51 @@ Include this exact JSON block under a `### entry_state.json` heading:
     "scope_roots": "tmp/scope_roots.txt"
   },
   "entry": {
-    "variable": "g_ArDriverEntry",
+    "variable": "g_DemoDriverEntry",
     "file": "/abs/path/...",
     "line": 39,
-    "module_name": "ar_service",
-    "bind": "HdfArDriverBind",
-    "init": "HdfArDriverInit",
-    "release": "HdfArDriverRelease",
+    "module_name": "demo_service",
+    "bind": "HdfDemoDriverBind",
+    "init": "HdfDemoDriverInit",
+    "release": "HdfDemoDriverRelease",
     "registration": {
       "form": "HDF_INIT",
       "file": "/abs/path/...",
       "line": 50,
-      "evidence": "HDF_INIT(g_ArDriverEntry)"
+      "evidence": "HDF_INIT(g_DemoDriverEntry)"
     }
   },
   "bind": {
     "status": "completed",
-    "function": "HdfArDriverBind",
+    "function": "HdfDemoDriverBind",
     "file": "/abs/path/...",
     "line": 72,
-    "host_type": "HdfArHost",
+    "host_type": "HdfDemoHost",
     "dispatch_functions": [
       {
-        "name": "ArDriverDispatch",
+        "name": "DemoDriverDispatch",
         "file": "/abs/path/...",
         "line": 129,
-        "via": "hdfArHost->ioService.Dispatch"
+        "via": "hdfDemoHost->ioService.Dispatch"
       }
     ],
     "stub": {
       "member": "stub",
-      "interface_type": "IActivityInterface",
-      "impl_class": "ArService",
+      "interface_type": "IDemoInterface",
+      "impl_class": "DemoService",
       "impl_file": "/abs/path/...",
-      "stub_class": "ActivityInterfaceStub",
+      "stub_class": "DemoInterfaceStub",
       "on_remote_request": {
-        "name": "OHOS::HDI::ActivityRecognition::V1_0::ActivityInterfaceStub::OnRemoteRequest",
+        "name": "OHOS::HDI::Demo::V1_0::DemoInterfaceStub::OnRemoteRequest",
         "file": "/abs/path/...",
         "line": 160
       },
-      "evidence": "hdfArHost->stub = ...GetOrNewObject(serviceImpl, IActivityInterface::GetDescriptor())"
+      "evidence": "hdfDemoHost->stub = ...GetOrNewObject(serviceImpl, IDemoInterface::GetDescriptor())"
     },
     "service_registration": {
       "file": "/abs/path/...",
       "line": 110,
-      "evidence": "deviceObject->service = &hdfArHost->ioService"
+      "evidence": "deviceObject->service = &hdfDemoHost->ioService"
     }
   }
 }
@@ -483,14 +483,14 @@ Include this exact JSON block under a `### trace_state.json` heading:
 ```json
 {
   "status": "in_progress",
-  "service_name": "ar_service",
+  "service_name": "demo_service",
   "entry_dispatchers": [
-    {"name": "ArDriverDispatch", "file": "/abs/path/...", "line": 129}
+    {"name": "DemoDriverDispatch", "file": "/abs/path/...", "line": 129}
   ],
   "queue": [
     {
       "id": 1,
-      "dispatcher": "ArDriverDispatch",
+      "dispatcher": "DemoDriverDispatch",
       "dispatcher_file": "/abs/path/...",
       "dispatcher_line": 129,
       "current_cmd_expr": "cmdId",
@@ -500,39 +500,39 @@ Include this exact JSON block under a `### trace_state.json` heading:
       "data_vars": ["data"],
       "data_derived": true,
       "parent_case_id": null,
-      "path": ["ArDriverDispatch"],
+      "path": ["DemoDriverDispatch"],
       "status": "pending"
     }
   ],
   "cases": [
     {
       "id": 1,
-      "dispatcher": "OHOS::HDI::ActivityRecognition::V1_0::ActivityInterfaceStub::OnRemoteRequest",
+      "dispatcher": "OHOS::HDI::Demo::V1_0::DemoInterfaceStub::OnRemoteRequest",
       "dispatcher_file": "/abs/path/...",
       "dispatcher_line": 160,
       "dispatch_site": {"file": "/abs/path/...", "line": 163},
       "level": 2,
-      "case_expr": "CMD_ACTIVITY_INTERFACE_GET_VERSION",
+      "case_expr": "CMD_DEMO_INTERFACE_GET_VERSION",
       "case_value": 0,
-      "outer_cmd_expr": "CMD_ACTIVITY_INTERFACE_GET_VERSION",
+      "outer_cmd_expr": "CMD_DEMO_INTERFACE_GET_VERSION",
       "outer_cmd_value": 0,
       "parent_case_id": null,
       "status": "analyzed",
       "handlers": [
         {
-          "name": "ActivityInterfaceStubGetVersion",
+          "name": "DemoInterfaceStubGetVersion",
           "file": "/abs/path/...",
           "line": 1200
         }
       ],
-      "evidence": "case CMD_ACTIVITY_INTERFACE_GET_VERSION: return ActivityInterfaceStubGetVersion(data, reply, option);"
+      "evidence": "case CMD_DEMO_INTERFACE_GET_VERSION: return DemoInterfaceStubGetVersion(data, reply, option);"
     }
   ],
   "handlers": [
     {
-      "cmd_id_macro": "CMD_ACTIVITY_INTERFACE_GET_VERSION",
+      "cmd_id_macro": "CMD_DEMO_INTERFACE_GET_VERSION",
       "cmd_id_value": 0,
-      "interface_function": "ActivityInterfaceStubGetVersion",
+      "interface_function": "DemoInterfaceStubGetVersion",
       "file": "/abs/path/...",
       "definition_line": 1200
     }
@@ -672,15 +672,15 @@ Include these subsections:
 Include the sample code block from rr1:
 
 ```c
-struct HdfDriverEntry g_ArDriverEntry = {
+struct HdfDriverEntry g_DemoDriverEntry = {
     .moduleVersion = 1,
-    .moduleName = "ar_service",
-    .Bind = HdfArDriverBind,
-    .Init = HdfArDriverInit,
-    .Release = HdfArDriverRelease,
+    .moduleName = "demo_service",
+    .Bind = HdfDemoDriverBind,
+    .Init = HdfDemoDriverInit,
+    .Release = HdfDemoDriverRelease,
 };
 
-HDF_INIT(g_ArDriverEntry);
+HDF_INIT(g_DemoDriverEntry);
 ```
 
 - [ ] **Step 2: Verify Phase 1 content**
@@ -722,24 +722,24 @@ Include these subsections:
    - still ambiguous → `bind_ambiguous`, list candidates, exit;
    - no body → `bind_definition_not_found`, exit.
 2. **提取 Host 与 Dispatch** — identify `new <HostType>`, pointer/stack/static, `sptr`/`std::unique_ptr`/`std::make_unique`/factory instances; accept `host->ioService.Dispatch = X`, `host->ioService = { .Dispatch = X }`, `host.ioService.Dispatch = X`, `host->Dispatch = X`; if absent, follow initialization functions with a visited set and search scope for Dispatch assignments; keep all Dispatch functions; a Dispatch whose definition is outside scope gets `file`/`line = null` and is recorded as `unresolved` by phase 3 instead of generating a work item; if all Dispatch entries are skipped and `stub.on_remote_request` is non-null, phase 3 seeds from that OnRemoteRequest; none → `dispatch_not_found`, exit.
-3. **提取 stub、接口与实现类（可选）** — find stub-like member assignment; trace `GetOrNewObject(serviceImpl, IActivityInterface::GetDescriptor())` or `new XxxStub`; record stub member, interface type, impl class (class body required), stub class; search both `<interface_type>Stub` and the leading-`I`-stripped name; locate `OnRemoteRequest` with exact-stub-first/nearest-base precedence; missing is not fatal.
+3. **提取 stub、接口与实现类（可选）** — find stub-like member assignment; trace `GetOrNewObject(serviceImpl, IDemoInterface::GetDescriptor())` or `new XxxStub`; record stub member, interface type, impl class (class body required), stub class; search both `<interface_type>Stub` and the leading-`I`-stripped name; locate `OnRemoteRequest` with exact-stub-first/nearest-base precedence; missing is not fatal.
 4. **服务注册证据** — find `deviceObject->service = &host->ioService` or equivalent; record evidence only; missing fields may be null.
 5. **阶段产物** — set `bind.status = in_progress` at phase start; write `bind` to `tmp/entry_state.json`; proceed to `trace_dispatch`.
 
 Include the sample snippets from rr1:
 
 ```c
-hdfArHost->ioService.Dispatch = ArDriverDispatch;
-hdfArHost->ioService.Open = nullptr;
-hdfArHost->ioService.Release = nullptr;
+hdfDemoHost->ioService.Dispatch = DemoDriverDispatch;
+hdfDemoHost->ioService.Open = nullptr;
+hdfDemoHost->ioService.Release = nullptr;
 
-ArService *impl = new (std::nothrow) ArService();
+DemoService *impl = new (std::nothrow) DemoService();
 ...
-sptr<IActivityInterface> serviceImpl = impl;
-hdfArHost->stub = OHOS::HDI::ObjectCollector::GetInstance().GetOrNewObject(serviceImpl,
-    IActivityInterface::GetDescriptor());
+sptr<IDemoInterface> serviceImpl = impl;
+hdfDemoHost->stub = OHOS::HDI::ObjectCollector::GetInstance().GetOrNewObject(serviceImpl,
+    IDemoInterface::GetDescriptor());
 ...
-deviceObject->service = &hdfArHost->ioService;
+deviceObject->service = &hdfDemoHost->ioService;
 ```
 
 - [ ] **Step 2: Verify Phase 2 content**
@@ -904,10 +904,10 @@ Include this exact JSON block:
 ```json
 [
   {
-    "cmd_id_macro": "CMD_ACTIVITY_INTERFACE_GET_VERSION",
+    "cmd_id_macro": "CMD_DEMO_INTERFACE_GET_VERSION",
     "cmd_id_value": 0,
-    "interface_function": "ActivityInterfaceStubGetVersion",
-    "file": "/abs/path/activity_interface_stub.cpp"
+    "interface_function": "DemoInterfaceStubGetVersion",
+    "file": "/abs/path/demo_interface_stub.cpp"
   }
 ]
 ```
@@ -1055,7 +1055,7 @@ Write a `### 术语表` heading, then include exactly this table:
 | 用词 | 含义 |
 |------|------|
 | 服务注册点 | 通过 moduleName 精确定位到的 `HdfDriverEntry` 定义及其注册引用 |
-| 服务入口变量 | `HdfDriverEntry` 类型的变量，如 `g_ArDriverEntry` |
+| 服务入口变量 | `HdfDriverEntry` 类型的变量，如 `g_DemoDriverEntry` |
 | Bind 函数 | 入口结构体 `.Bind` 字段指向的函数 |
 | Dispatch 函数 | Bind 阶段链接到 Host 的 `ioService.Dispatch`（或等价成员）的函数 |
 | 分发函数 | 根据 cmdId 选择处理路径的函数 |
@@ -1090,11 +1090,11 @@ Include exactly these 12 rows:
 
 Include three examples:
 
-1. **首次分析** — `/hal-service-api-finder /srv/ohos/drivers ar_service`; show initialization, phase 1, phase 2, phase 3, self-check, output; report `127 files / 8 cases / 8 interfaces / 0 unresolved`.
+1. **首次分析** — `/hal-service-api-finder /srv/ohos/drivers demo_service`; show initialization, phase 1, phase 2, phase 3, self-check, output; report `127 files / 8 cases / 8 interfaces / 0 unresolved`.
 2. **断点续跑** — progress phase `trace_dispatch`, cases 1-3 analyzed, case 4 in_progress; resume and finish.
-3. **service 未找到** — `/srv/ohos/drivers ar_service_typo`; report `service_not_found`, scope file count, searched pattern, suggestions.
+3. **service 未找到** — `/srv/ohos/drivers demo_service_typo`; report `service_not_found`, scope file count, searched pattern, suggestions.
 
-Use the exact sample names from rr1: `g_ArDriverEntry`, `HdfArDriverBind`, `ArDriverDispatch`, `IActivityInterface`, `ArService`, `ActivityInterfaceStub::OnRemoteRequest`, `ActivityInterfaceStubGetVersion`.
+Use the exact sample names from rr1: `g_DemoDriverEntry`, `HdfDemoDriverBind`, `DemoDriverDispatch`, `IDemoInterface`, `DemoService`, `DemoInterfaceStub::OnRemoteRequest`, `DemoInterfaceStubGetVersion`.
 
 - [ ] **Step 7: Verify sections 九-十二**
 
@@ -1164,21 +1164,21 @@ PY
 
 Expected: `N JSON blocks valid` with no exception.
 
-- [ ] **Step 2: Walk through the ar_service sample manually**
+- [ ] **Step 2: Walk through the demo_service sample manually**
 
 Read `hal-service-api-finder/SKILL.md` end to end and verify each item:
 
 | # | Walkthrough item | Expected prompt behavior |
 |---|------------------|--------------------------|
-| 1 | Search `"ar_service"` in scope | Finds `.moduleName = "ar_service"` in `g_ArDriverEntry` |
-| 2 | Registration | Finds `HDF_INIT(g_ArDriverEntry)`; records `registration.form = "HDF_INIT"` |
-| 3 | Bind | Reads `HdfArDriverBind`; records `host_type = "HdfArHost"` |
-| 4 | Dispatch | Finds `hdfArHost->ioService.Dispatch = ArDriverDispatch` |
-| 5 | Stub/impl | Finds `GetOrNewObject(serviceImpl, IActivityInterface::GetDescriptor())`, `ArService`, `IActivityInterface` |
-| 6 | SendRequest | Follows `hdfArHost->stub->SendRequest(cmdId, ...)` |
-| 7 | OnRemoteRequest | Locates `ActivityInterfaceStub::OnRemoteRequest`; outer cmd is still empty before its switch |
-| 8 | Outer cmd | The first switch case (`CMD_ACTIVITY_INTERFACE_GET_VERSION`) becomes the outer cmd |
-| 9 | Handler | Records `ActivityInterfaceStubGetVersion` as the direct target |
+| 1 | Search `"demo_service"` in scope | Finds `.moduleName = "demo_service"` in `g_DemoDriverEntry` |
+| 2 | Registration | Finds `HDF_INIT(g_DemoDriverEntry)`; records `registration.form = "HDF_INIT"` |
+| 3 | Bind | Reads `HdfDemoDriverBind`; records `host_type = "HdfDemoHost"` |
+| 4 | Dispatch | Finds `hdfDemoHost->ioService.Dispatch = DemoDriverDispatch` |
+| 5 | Stub/impl | Finds `GetOrNewObject(serviceImpl, IDemoInterface::GetDescriptor())`, `DemoService`, `IDemoInterface` |
+| 6 | SendRequest | Follows `hdfDemoHost->stub->SendRequest(cmdId, ...)` |
+| 7 | OnRemoteRequest | Locates `DemoInterfaceStub::OnRemoteRequest`; outer cmd is still empty before its switch |
+| 8 | Outer cmd | The first switch case (`CMD_DEMO_INTERFACE_GET_VERSION`) becomes the outer cmd |
+| 9 | Handler | Records `DemoInterfaceStubGetVersion` as the direct target |
 | 10 | Default | `default` branch goes to `default_cases`, not final JSON |
 | 11 | Output | Eight records; GET_VERSION has value 0; other values resolved from headers |
 | 12 | Resume | Interrupt after case 3; rerun skips cases 1-3 and continues at case 4 |

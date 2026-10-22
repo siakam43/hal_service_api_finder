@@ -36,18 +36,18 @@ struct HdfDriverEntry g_xxxDriverEntry = { .moduleName = "...", .Bind = ..., .In
 
 样例代码：
 '''c
-struct HdfDriverEntry g_ArDriverEntry = {
+struct HdfDriverEntry g_DemoDriverEntry = {
     .moduleVersion = 1,
-    .moduleName = "ar_service",
-    .Bind = HdfArDriverBind,
-    .Init = HdfArDriverInit,
-    .Release = HdfArDriverRelease,
+    .moduleName = "demo_service",
+    .Bind = HdfDemoDriverBind,
+    .Init = HdfDemoDriverInit,
+    .Release = HdfDemoDriverRelease,
 };
 
 #ifndef __cplusplus
 extern "C" {
 #endif
-HDF_INIT(g_ArDriverEntry);
+HDF_INIT(g_DemoDriverEntry);
 #ifndef __cplusplus
 }
 #endif
@@ -63,52 +63,52 @@ Bind函数的主要逻辑:
 2）初始化Dispatch
 dispatch函数会被链接到Host结构体的一个IDeviceIoService类型成员的Dispatch成员（一个函数指针）上。dispatch函数用于后续HAL service的消息分发处理。
 3）初始化stub （大概率存在，也可能在后续流程中实现）
-stub指针是Host结构体的一个成员指针（命名中可能带有stub，但不是一定），会指向本HAL service的具体实现类（Implementation）的一个实例（Instance）。（如下面例子中，ArService对应的impl类型为IActivityInterface）
+stub指针是Host结构体的一个成员指针（命名中可能带有stub，但不是一定），会指向本HAL service的具体实现类（Implementation）的一个实例（Instance）。（如下面例子中，DemoService对应的impl类型为IDemoInterface）
 4）服务注册
 初始化完成后的Host结构体会被链接到HdfDeviceObject（Bind函数的参数），完成服务注册。
 
 样例代码：
 '''c
-static int32_t HdfArDriverBind(struct HdfDeviceObject *deviceObject)
+static int32_t HdfDemoDriverBind(struct HdfDeviceObject *deviceObject)
 {
     if (deviceObject == nullptr) {
         return HDF_FAILURE;
     }
 
-    struct HdfArHost *hdfArHost = new (std::nothrow) HdfArHost;
-    if (hdfArHost == nullptr) {
-        SH_HILOGE(AR_LOG_TAG, "failed to create create HdfArHost object");
+    struct HdfDemoHost *hdfDemoHost = new (std::nothrow) HdfDemoHost;
+    if (hdfDemoHost == nullptr) {
+        SH_HILOGE(DEMO_LOG_TAG, "failed to create create HdfDemoHost object");
         return HDF_FAILURE;
     }
 
-    hdfArHost->ioService.Dispatch = ArDriverDispatch;
-    hdfArHost->ioService.Open = nullptr;
-    hdfArHost->ioService.Release = nullptr;
+    hdfDemoHost->ioService.Dispatch = DemoDriverDispatch;
+    hdfDemoHost->ioService.Open = nullptr;
+    hdfDemoHost->ioService.Release = nullptr;
 
-    ArService *impl = new (std::nothrow) ArService();
+    DemoService *impl = new (std::nothrow) DemoService();
     if (impl == nullptr) {
-        SH_HILOGE(AR_LOG_TAG, "failed to create ArService");
-        delete hdfArHost;
+        SH_HILOGE(DEMO_LOG_TAG, "failed to create DemoService");
+        delete hdfDemoHost;
         return HDF_FAILURE;
     }
 
     int32_t ret = impl->Init();
     if (ret != HDF_SUCCESS) {
-        SH_HILOGE(AR_LOG_TAG, "service init failed, please check error code=%{public}d", ret);
-        delete hdfArHost;
+        SH_HILOGE(DEMO_LOG_TAG, "service init failed, please check error code=%{public}d", ret);
+        delete hdfDemoHost;
         return HDF_FAILURE;
     }
-    sptr<IActivityInterface> serviceImpl = impl;
-    hdfArHost->stub = OHOS::HDI::ObjectCollector::GetInstance().GetOrNewObject(serviceImpl,
-        IActivityInterface::GetDescriptor());
-    if (hdfArHost->stub == nullptr) {
-        SH_HILOGE(AR_LOG_TAG, "failed to get stub object");
-        delete hdfArHost;
+    sptr<IDemoInterface> serviceImpl = impl;
+    hdfDemoHost->stub = OHOS::HDI::ObjectCollector::GetInstance().GetOrNewObject(serviceImpl,
+        IDemoInterface::GetDescriptor());
+    if (hdfDemoHost->stub == nullptr) {
+        SH_HILOGE(DEMO_LOG_TAG, "failed to get stub object");
+        delete hdfDemoHost;
         return HDF_FAILURE;
     }
 
-    deviceObject->service = &hdfArHost->ioService;
-    SH_HILOGI(AR_LOG_TAG, "successful");
+    deviceObject->service = &hdfDemoHost->ioService;
+    SH_HILOGI(DEMO_LOG_TAG, "successful");
     return HDF_SUCCESS;
 }
 '''
@@ -126,7 +126,7 @@ Dispatch函数的入参包括：`client`（设备）、`cmdId`（命令号）、
 
 样例代码：
 '''c
-static int32_t ArDriverDispatch(struct HdfDeviceIoClient *client, int32_t cmdId, struct HdfSBuf *data,
+static int32_t DemoDriverDispatch(struct HdfDeviceIoClient *client, int32_t cmdId, struct HdfSBuf *data,
     struct HdfSBuf *reply)
 {
     OHOS::MessageParcel *dataParcel = nullptr;
@@ -134,11 +134,11 @@ static int32_t ArDriverDispatch(struct HdfDeviceIoClient *client, int32_t cmdId,
     OHOS::MessageOption option;
 
     if (SbufToParcel(data, &dataParcel) != HDF_SUCCESS) {
-        SH_HILOGE(AR_LOG_TAG, "invalid data sbuf object to dispatch");
+        SH_HILOGE(DEMO_LOG_TAG, "invalid data sbuf object to dispatch");
         return HDF_SUCCESS;
     }
     if (SbufToParcel(reply, &replyParcel) != HDF_SUCCESS) {
-        SH_HILOGE(AR_LOG_TAG, "invalid reply sbuf object to dispatch");
+        SH_HILOGE(DEMO_LOG_TAG, "invalid reply sbuf object to dispatch");
         return HDF_ERR_INVALID_PARAM;
     }
 
@@ -147,35 +147,35 @@ static int32_t ArDriverDispatch(struct HdfDeviceIoClient *client, int32_t cmdId,
         HDF_LOGE("%{public}s: client or client.device or service is nullptr", __func__);
         return HDF_FAILURE;
     }
-    struct HdfArHost *hdfArHost = CONTAINER_OF(
-        client->device->service, struct HdfArHost, ioService);
-    if (hdfArHost == nullptr || hdfArHost->stub == nullptr) {
-        HDF_LOGE("%{public}s:invalid hdfArHost", __func__);
+    struct HdfDemoHost *hdfDemoHost = CONTAINER_OF(
+        client->device->service, struct HdfDemoHost, ioService);
+    if (hdfDemoHost == nullptr || hdfDemoHost->stub == nullptr) {
+        HDF_LOGE("%{public}s:invalid hdfDemoHost", __func__);
         return HDF_ERR_INVALID_PARAM;
     }
 
-    return hdfArHost->stub->SendRequest(cmdId, *dataParcel, *replyParcel, option);
+    return hdfDemoHost->stub->SendRequest(cmdId, *dataParcel, *replyParcel, option);
 }
 
-int32_t OHOS::HDI::ActivityRecognition::V1_0::ActivityInterfaceStub::OnRemoteRequest(uint32_t code, MessageParcel& data, MessageParcel& reply, MessageOption& option)
+int32_t OHOS::HDI::Demo::V1_0::DemoInterfaceStub::OnRemoteRequest(uint32_t code, MessageParcel& data, MessageParcel& reply, MessageOption& option)
 {
     switch (code) {
-        case CMD_ACTIVITY_INTERFACE_GET_VERSION:
-            return ActivityInterfaceStubGetVersion(data, reply, option);
-        case CMD_ACTIVITY_INTERFACE_REGISTER_ACT_RECOGNITION_CALLBACK:
-            return ActivityInterfaceStubRegisterActRecognitionCallback(data, reply, option);
-        case CMD_ACTIVITY_INTERFACE_UNREGISTER_ACT_RECOGNITION_CALLBACK:
-            return ActivityInterfaceStubUnregisterActRecognitionCallback(data, reply, option);
-        case CMD_ACTIVITY_INTERFACE_GET_SUPPORT_ACTIVITY:
-            return ActivityInterfaceStubGetSupportActivity(data, reply, option);
-        case CMD_ACTIVITY_INTERFACE_GET_CURRENT_ACTIVITY:
-            return ActivityInterfaceStubGetCurrentActivity(data, reply, option);
-        case CMD_ACTIVITY_INTERFACE_ENABLE_ACT_RECOGNITION_EVENT:
-            return ActivityInterfaceStubEnableActRecognitionEvent(data, reply, option);
-        case CMD_ACTIVITY_INTERFACE_DISABLE_ACT_RECOGNITION_EVENT:
-            return ActivityInterfaceStubDisableActRecognitionEvent(data, reply, option);
-        case CMD_ACTIVITY_INTERFACE_FLUSH_ACTIVITY:
-            return ActivityInterfaceStubFlushActivity(data, reply, option);
+        case CMD_DEMO_INTERFACE_GET_VERSION:
+            return DemoInterfaceStubGetVersion(data, reply, option);
+        case CMD_DEMO_INTERFACE_REGISTER_CALLBACK:
+            return DemoInterfaceStubRegisterCallback(data, reply, option);
+        case CMD_DEMO_INTERFACE_UNREGISTER_CALLBACK:
+            return DemoInterfaceStubUnregisterCallback(data, reply, option);
+        case CMD_DEMO_INTERFACE_GET_SUPPORT_FEATURE:
+            return DemoInterfaceStubGetSupportFeature(data, reply, option);
+        case CMD_DEMO_INTERFACE_GET_CURRENT_STATE:
+            return DemoInterfaceStubGetCurrentState(data, reply, option);
+        case CMD_DEMO_INTERFACE_ENABLE_EVENT:
+            return DemoInterfaceStubEnableEvent(data, reply, option);
+        case CMD_DEMO_INTERFACE_DISABLE_EVENT:
+            return DemoInterfaceStubDisableEvent(data, reply, option);
+        case CMD_DEMO_INTERFACE_FLUSH:
+            return DemoInterfaceStubFlush(data, reply, option);
         default: {
             HDF_LOGE("%{public}s: cmd %{public}d is not supported", __func__, code);
             return IPCObjectStub::OnRemoteRequest(code, data, reply, option);
@@ -190,7 +190,7 @@ int32_t OHOS::HDI::ActivityRecognition::V1_0::ActivityInterfaceStub::OnRemoteReq
 
 本步骤输出： cmdId不同取值时，对应的外部接口函数。这也是skill的最终输出内容
 
-输出格式为JSON，包含cmdId的不同取值情况，记录每种情况下，cmdId对应的宏或宏表达式（例如CMD_ACTIVITY_INTERFACE_GET_VERSION），cmdId的实际取值(例如0), 对应的接口函数（例如ActivityInterfaceStubGetVersion），函数实现所在的源文件绝对路径。
+输出格式为JSON，包含cmdId的不同取值情况，记录每种情况下，cmdId对应的宏或宏表达式（例如CMD_DEMO_INTERFACE_GET_VERSION），cmdId的实际取值(例如0), 对应的接口函数（例如DemoInterfaceStubGetVersion），函数实现所在的源文件绝对路径。
 输出文件为project_dir/.ethunter_out/hal-service-api-finder/<service_name>_service_api.json
 
 
