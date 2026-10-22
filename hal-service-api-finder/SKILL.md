@@ -487,6 +487,177 @@ xargs -r -a "<out>/tmp/scope_files.txt" -d '\n' grep -I -H -n -E -w "<entry_var>
 
 ## 六、阶段二：分析 Bind
 
+阶段二只做一件事：在 scope 内定位 `entry.bind` 指向的 Bind 函数定义，提取 Host 类型、全部 Dispatch 函数、可选的 stub/接口/实现类信息与服务注册证据，写出 `entry_state.bind` 后进入阶段三。本阶段不做 cmdId 追踪，不展开业务函数。
+
+本阶段所有搜索沿用第三章“搜索纪律”：只允许搜索 `scope_files.txt` 中的文件；`scope_roots.txt` 非 null 时可按第三章“方式二”搜索，但最终仍以 `scope_files.txt` 为硬边界；禁止任何等价的全仓搜索。
+
+### 定位 Bind 定义
+
+输入：`entry_state.entry.bind`、`entry.file`、`entry.line`、`entry.variable`（阶段一已确认 `.Bind` 非空）。
+
+1. 归一化 `.Bind` 取值：
+   - 去掉首尾空白、取地址符 `&` 和强制类型转换（如 `(int32_t (*)(struct HdfDeviceObject *))HdfArDriverBind`），得到待解析标识符。
+   - 标识符是宏时：按第三章“方式一”在 scope 内搜索 `#define <宏名>`，必要时查 `macro.json`，逐层展开到函数名；无法展开或展开后找不到定义 → 报 `bind_definition_not_found`。
+   - 标识符是包装函数时（如函数体只有 `return HdfArDriverBind(dev);`）：沿调用继续解析到真正创建 Host、设置 Dispatch 的函数，`bind.function` 记真实 Bind 函数；若包装函数自身完成 Host/Dispatch 初始化，则以包装函数为准。
+   - C++ 作用域函数保留限定名（如 `ArDriver::Bind`）。
+2. 查找定义：
+   - 优先在 `entry.file` 内搜索（该文件必在 scope 内）：
+
+     ```bash
+     grep -I -H -n -F "<bind_name>" "<entry_file>"
+     ```
+
+   - 未找到再按第三章“方式一”在全 scope 搜索：
+
+     ```bash
+     xargs -r -a "<out>/tmp/scope_files.txt" -d '\n' grep -I -H -n -F "<bind_name>"
+     ```
+
+   - 只接受函数定义；函数调用、声明、注释、字符串中的同名文本一律不算。
+3. 验证完整函数体：对每个候选用 Read 从签名行读到配对的闭合 `}`，确认函数体完整（以 `);` 结尾的声明不算）。不得只看 grep 命中行。`bind.file` 记 scope 内绝对路径，`bind.line` 记函数签名所在行。
+4. 多定义处理（按顺序）：
+   - 候选 = 带完整函数体的定义。`entry.file` 内有候选时，候选范围取 `entry.file`；否则取全 scope。
+   - 签名兼容优先：兼容 `int32_t (*)(struct HdfDeviceObject *)` 指返回类型为 `int32_t` 或 `int`，只有一个参数且参数类型为 `struct HdfDeviceObject *`（允许写作 `HdfDeviceObject *`，忽略参数名与顶层限定符）。
+   - 候选范围内兼容候选恰好 1 个 → 选定；≥ 2 个 → 报 `bind_ambiguous`，evidence 列出全部候选的 `name`、`file`、`line`、签名。
+   - 兼容候选为 0：完整函数体候选恰好 1 个 → 选定并在分析记录中注明签名差异；≥ 2 个 → 报 `bind_ambiguous`；一个都没有 → 报 `bind_definition_not_found`，evidence 列出搜索名、scope 文件数以及被拒命中（声明、调用、注释、无函数体）与原因。
+
+### 提取 Host 与 Dispatch
+
+在 Bind 函数体（含展开后的真实函数体）内定位 `deviceObject` 参数与 Host 实例；参数名以实际代码为准（常见 `deviceObject`、`device`、`obj`）。
+
+Host 实例的创建形式都要识别：
+
+- `new <HostType>`：`HdfArHost *hdfArHost = new HdfArHost();`、`new (std::nothrow) HdfArHost()`、`auto *host = new HdfArHost;`
+- 指针实例：`HdfArHost *hdfArHost = &g_arHost;` 或由函数返回的指针；
+- 栈实例：`HdfArHost hdfArHost;`、`HdfArHost hdfArHost = {};`
+- 静态实例：`static HdfArHost hdfArHost;`、`static HdfArHost *hdfArHost = ...;`
+
+`bind.host_type` 记 Host 实例的类型名（去掉 `struct`/`class`、指针与顶层限定符，如 `HdfArHost`）。多个实例时，取最终承载 Dispatch 赋值、且与 `deviceObject->service = &<host>->ioService` 一致的实例；无法唯一确定时仍保留全部实例上的 Dispatch 函数，并在 `via` 中区分实例，`host_type` 记承载 Dispatch 的实例类型或 null。
+
+接受以下 Dispatch 赋值形式（`host` 代表识别出的实例，`.` 与 `->` 互换视为等价）：
+
+- `host->ioService.Dispatch = X;`
+- `host->ioService = { .Dispatch = X };`（含 `= (struct IDeviceIoService){ .Dispatch = X }` 等等价初始化）
+- `host.ioService.Dispatch = X;`
+- `host->Dispatch = X;`
+
+对每个有效赋值：
+
+- 用 Read 读取完整语句或初始化器以及所在函数上下文，确认赋给的是本 Bind 识别出的 host 实例，且不在注释/字符串中。
+- 记录全部 Dispatch 函数：`name` 为函数名（宏/包装同样展开到真实函数），`file`/`line` 为函数定义所在文件与签名行（用与 Bind 相同的“搜索 + 完整函数体”方法在 scope 内确认），`via` 记赋值左侧表达式原文（如 `hdfArHost->ioService.Dispatch`）；经初始化函数间接发现时写 `<初始化函数名>: <左侧表达式>`。
+- 按 `(name, file, line)` 去重；同一函数有多处赋值时，`via` 用 `;` 连接全部赋值左侧表达式。
+- Dispatch 函数定义不在 scope 内时，`file`/`line` 记 null，`via` 保留赋值位置，不丢弃该函数。
+
+Bind 函数体内没有 Dispatch 赋值时，按以下顺序继续，不得因 Bind 内没有赋值就判定失败：
+
+1. 跟随 Bind 函数体内调用的初始化/创建函数（接收 host、deviceObject 或返回 host 的函数），在 scope 内读取其完整函数体并查找上述赋值形式。
+2. 检查阶段一记录的 `entry.init` 及其调用的 host 初始化函数，只在其中查找 Dispatch 赋值，不展开其他逻辑。
+3. 按第三章“方式一”在 scope 内搜索 Dispatch 赋值与 host 标识：
+
+   ```bash
+   xargs -r -a "<out>/tmp/scope_files.txt" -d '\n' grep -I -H -n -E '(\.|->)Dispatch[[:space:]]*='
+   xargs -r -a "<out>/tmp/scope_files.txt" -d '\n' grep -I -H -n -E -w "<host_var>"
+   ```
+
+   其中 `<host_var>` 替换为实际变量名；可再用 host 类型名补充搜索。
+4. 对每个命中读取上下文，只保留作用于同一 host 实例（直接或经指针传递）的赋值。
+
+以上步骤完成后仍未找到任何 Dispatch 赋值 → 报 `dispatch_not_found`，保留 `phase = analyze_bind`，停止。
+
+### 提取 stub、接口与实现类（可选）
+
+在 Bind 函数体及上一步跟随的初始化函数中查找 stub 成员赋值。stub 信息缺失不是失败条件。
+
+1. 识别 stub 成员赋值：赋值左侧为 host/deviceObject 上名称包含 `stub`（不区分大小写）的成员，如 `hdfArHost->stub = ...`。
+2. 按右值形式追踪：
+   - `new XxxStub` / `new (std::nothrow) XxxStub(...)`：`stub_class` 记 `XxxStub`；`interface_type` 从 stub 基类、模板参数或 `GetDescriptor()` 返回值确定。
+   - `GetOrNewObject(serviceImpl, IActivityInterface::GetDescriptor())`：`interface_type` 取描述符所属接口或 `serviceImpl` 声明中的接口类型；`impl_class` 沿 `serviceImpl = impl`、`impl = new ArService()` 等赋值回溯到实际传入的实现类；`stub_class` 取 scope 内该接口对应的生成 Stub 类型（搜索 `<interface_type>Stub` 或 `class`/`struct ...Stub`，并用 `OnRemoteRequest` 交叉确认），无法确定时记 null，不猜测。
+   - 其他等价形式（工厂函数返回 stub 等）同样回溯到 stub 类型与接口。
+3. 定位实现类定义：在 scope 内搜索 `class <impl_class>` / `struct <impl_class>`（允许命名空间限定），`impl_file` 记类定义文件；不在 scope 内记 null，不视为失败。
+4. 定位 `OnRemoteRequest`：按第三章“方式一”优先搜索 `<stub_class>::OnRemoteRequest`；未命中则在 stub 类定义文件及其基类定义中搜索 `OnRemoteRequest` 定义。记录完整作用域限定名、文件、定义行；找不到时 `on_remote_request` 记 null，不视为失败。
+5. 组装 `bind.stub = {member, interface_type, impl_class, impl_file, stub_class, on_remote_request, evidence}`；`evidence` 记 stub 赋值与 `new`/`GetOrNewObject` 表达式原文。没有 stub 赋值或无法确认任何 stub 字段 → `bind.stub = null`。
+
+### 服务注册证据
+
+在 Bind 函数体及跟随的初始化函数中查找 deviceObject 与 host ioService 的关联赋值，例如：
+
+- `deviceObject->service = &host->ioService;`
+- `deviceObject->service = &host.ioService;`
+- 经指针别名或强制类型转换的等价写法。
+
+记录 `bind.service_registration = {file, line, evidence}`：`file`/`line` 取 `scope_files.txt` 顺序中的第一处有效赋值，`evidence` 记语句原文（多处时列出全部）。该字段仅作证据，缺失不失败：记 `{file: null, line: null, evidence: null}` 后继续。
+
+rr1 合法示例：
+
+```c
+hdfArHost->ioService.Dispatch = ArDriverDispatch;
+hdfArHost->ioService.Open = nullptr;
+hdfArHost->ioService.Release = nullptr;
+
+ArService *impl = new (std::nothrow) ArService();
+...
+sptr<IActivityInterface> serviceImpl = impl;
+hdfArHost->stub = OHOS::HDI::ObjectCollector::GetInstance().GetOrNewObject(serviceImpl,
+    IActivityInterface::GetDescriptor());
+...
+deviceObject->service = &hdfArHost->ioService;
+```
+
+若 host 声明为 `HdfArHost *hdfArHost`，上例应提取：`host_type = HdfArHost`；`dispatch_functions = [{name: "ArDriverDispatch", file: <定义文件>, line: <定义行>, via: "hdfArHost->ioService.Dispatch"}]`；`stub.member = "stub"`、`stub.interface_type = "IActivityInterface"`、`stub.impl_class = "ArService"`、`stub.stub_class = "IActivityInterfaceStub"`、`stub.on_remote_request` 指向该 Stub 的 `OnRemoteRequest` 定义；`service_registration.evidence = "deviceObject->service = &hdfArHost->ioService"`。`Open` / `Release` 不是 Dispatch，忽略。
+
+### 阶段产物
+
+提取成功后，按第四章 `entry_state.json` 的字段形状写入 `bind`；只新增/覆盖 `bind`，保留 `service_name`、`scope`、`entry` 不变：
+
+```json
+"bind": {
+  "status": "completed",
+  "function": "<真实 Bind 函数名>",
+  "file": "<scope 内绝对路径>",
+  "line": 72,
+  "host_type": "HdfArHost",
+  "dispatch_functions": [
+    {
+      "name": "ArDriverDispatch",
+      "file": "<scope 内绝对路径>",
+      "line": 129,
+      "via": "hdfArHost->ioService.Dispatch"
+    }
+  ],
+  "stub": {
+    "member": "stub",
+    "interface_type": "IActivityInterface",
+    "impl_class": "ArService",
+    "impl_file": "<scope 内绝对路径或 null>",
+    "stub_class": "IActivityInterfaceStub",
+    "on_remote_request": {
+      "name": "<Stub 作用域限定名>::OnRemoteRequest",
+      "file": "<scope 内绝对路径>",
+      "line": 160
+    },
+    "evidence": "hdfArHost->stub = ...GetOrNewObject(serviceImpl, IActivityInterface::GetDescriptor())"
+  },
+  "service_registration": {
+    "file": "<scope 内绝对路径或 null>",
+    "line": 110,
+    "evidence": "deviceObject->service = &hdfArHost->ioService"
+  }
+}
+```
+
+- `bind.status` 只在全部必需字段提取成功后写 `completed`；阶段开始时可将已有 `bind.status` 置为 `in_progress`，失败时不得写 `completed`。
+- `dispatch_functions` 至少一项，已按 `(name, file, line)` 去重。
+- `stub` 可为 null；`on_remote_request` 可为 null。
+- 先写 `<out>/tmp/entry_state.json.tmp`，再 `mv` 覆盖 `<out>/tmp/entry_state.json`，避免半截 JSON；重跑本阶段时整体覆盖。
+- 写入成功后立即更新 `progress.json`：`phase = trace_dispatch`，`analyze_bind.status = completed`，`trace_dispatch.status = in_progress`，`error = null`；保存后进入 `## 七、阶段三：cmdId 分发追踪`。
+
+失败处理：
+
+- 任一失败码一律按第四章写 `progress.error = {code, message, evidence}`，保持 `phase = analyze_bind`，不写 `bind.status = completed`，不进入阶段三；下次运行从本阶段开头重跑（本阶段幂等）。
+- `bind_definition_not_found`：宏/包装无法展开，或展开后 scope 内没有带完整函数体的定义。message 记录搜索名与 scope 文件数；evidence 列出展开链、被拒命中及原因。
+- `bind_ambiguous`：存在多个可选定义且无法按同文件/签名规则唯一确定。evidence 列出全部候选的 `name`、`file`、`line`、签名。
+- `dispatch_not_found`：Bind 体内、跟随的初始化函数中以及 scope 搜索均未发现 Dispatch 赋值。evidence 记录 host 变量/类型、已跟随的函数、搜索模式与命中处理结果。
+
 ## 七、阶段三：cmdId 分发追踪
 
 ## 八、输出与自检
