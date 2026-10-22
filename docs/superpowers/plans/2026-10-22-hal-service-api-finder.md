@@ -719,7 +719,7 @@ Include these subsections:
    - signature matching `int32_t (*)(struct HdfDeviceObject *)` first;
    - still ambiguous → `bind_ambiguous`, list candidates, exit;
    - no body → `bind_definition_not_found`, exit.
-2. **提取 Host 与 Dispatch** — identify `new <HostType>`, pointer/stack/static instances; accept `host->ioService.Dispatch = X`, `host->ioService = { .Dispatch = X }`, `host.ioService.Dispatch = X`, `host->Dispatch = X`; if absent, follow initialization functions and search scope for Dispatch assignments; keep all Dispatch functions; none → `dispatch_not_found`, exit.
+2. **提取 Host 与 Dispatch** — identify `new <HostType>`, pointer/stack/static instances; accept `host->ioService.Dispatch = X`, `host->ioService = { .Dispatch = X }`, `host.ioService.Dispatch = X`, `host->Dispatch = X`; if absent, follow initialization functions and search scope for Dispatch assignments; keep all Dispatch functions; a Dispatch whose definition is outside scope gets `file`/`line = null` and is recorded as `unresolved` by phase 3 instead of generating a work item; none → `dispatch_not_found`, exit.
 3. **提取 stub、接口与实现类（可选）** — find stub-like member assignment; trace `GetOrNewObject(serviceImpl, IActivityInterface::GetDescriptor())` or `new XxxStub`; record stub member, interface type, impl class, stub class; locate `OnRemoteRequest`; missing is not fatal.
 4. **服务注册证据** — find `deviceObject->service = &host->ioService` or equivalent; record evidence only.
 5. **阶段产物** — write `bind` to `tmp/entry_state.json`; proceed to `trace_dispatch`.

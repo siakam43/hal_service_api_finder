@@ -546,7 +546,7 @@ Host 实例的创建形式都要识别：
 - 用 Read 读取完整语句或初始化器以及所在函数上下文，确认赋给的是本 Bind 识别出的 host 实例，且不在注释/字符串中。
 - 记录全部 Dispatch 函数：`name` 为函数名（宏/包装同样展开到真实函数），`file`/`line` 为函数定义所在文件与签名行（用与 Bind 相同的“搜索 + 完整函数体”方法在 scope 内确认），`via` 记赋值左侧表达式原文（如 `hdfArHost->ioService.Dispatch`）；经初始化函数间接发现时写 `<初始化函数名>: <左侧表达式>`。
 - 按 `(name, file, line)` 去重；同一函数有多处赋值时，`via` 用 `;` 连接全部赋值左侧表达式。
-- Dispatch 函数定义不在 scope 内时，`file`/`line` 记 null，`via` 保留赋值位置，不丢弃该函数。
+- Dispatch 函数定义不在 scope 内时，`file`/`line` 记 null，`via` 保留赋值位置，不丢弃该函数。这类条目视为未解析目标：阶段三不得为其生成工作项，改记入 `trace_state.unresolved`（`kind = "definition"`）。
 
 Bind 函数体内没有 Dispatch 赋值时，按以下顺序继续，不得因 Bind 内没有赋值就判定失败：
 
@@ -609,7 +609,7 @@ deviceObject->service = &hdfArHost->ioService;
 
 提取成功后，按第四章 `entry_state.json` 的字段形状写入 `bind`；只新增/覆盖 `bind`，保留 `service_name`、`scope`、`entry` 不变：
 
-```json
+```text
 "bind": {
   "status": "completed",
   "function": "<真实 Bind 函数名>",
