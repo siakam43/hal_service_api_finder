@@ -527,7 +527,7 @@ Include this exact JSON block under a `### trace_state.json` heading:
   "dispatch_cache": [],
   "visited": [],
   "counters": {
-    "queue_remaining": 0,
+    "queue_remaining": 1,
     "cases_total": 1,
     "handlers_total": 1,
     "unresolved_total": 0

@@ -314,7 +314,7 @@ xargs -r -a "<out>/tmp/scope_roots.txt" -d '\n' grep -I -rn -F "<pattern>"
   "dispatch_cache": [],
   "visited": [],
   "counters": {
-    "queue_remaining": 0,
+    "queue_remaining": 1,
     "cases_total": 1,
     "handlers_total": 1,
     "unresolved_total": 0
