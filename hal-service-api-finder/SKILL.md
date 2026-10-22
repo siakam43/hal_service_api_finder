@@ -647,7 +647,6 @@ deviceObject->service = &hdfDemoHost->ioService;
 阶段三只做一件事：从阶段二的 Dispatch（或 stub 的 OnRemoteRequest）出发，沿全部分发路径追踪 cmdId 与 data 的流向，把每个最外层 cmdId 分支直接消费 data 的业务函数记为接口函数候选，写入 `trace_state.json`。本阶段只追踪到 cmdId 处理位置，不展开接口函数内部实现，不做完整污点传播。
 
 - 不设深度上限、不设扇出上限；所有静态可确定的目标全部追踪，环检测是唯一的循环保护。
-- 所有搜索沿用第三章“搜索纪律”：只读 `scope_files.txt` 列出的文件；`scope_roots.txt` 非 null 时可按第三章“方式二”搜索，但最终仍以 `scope_files.txt` 为硬边界；禁止任何等价的全仓搜索。
 - 接口函数定义必须在 scope 内；定义在 scope 外时记入 `unresolved`，不输出、不臆造。
 
 ### 3.1 输入与队列初始化
@@ -681,7 +680,7 @@ deviceObject->service = &hdfDemoHost->ioService;
 队列非空时反复执行：
 
 1. 取出第一个 `pending` 工作项，置为 `in_progress`，保存 `trace_state`。
-2. 定位并完整读取 dispatcher 定义：已知 `dispatcher_file` / `dispatcher_line` 时直接 Read 该文件，从签名行读到配对的闭合 `}`；否则按第三章“方式一”在 scope 内搜索精确名称，只接受带完整函数体的定义（调用、声明、注释、字符串中的同名文本不算），并读完整函数体。C++ 限定名找不到定义时，在 scope 内的类体中搜索未限定方法名，但记录限定名。定义不在 scope 内或无法唯一确定 → 记 `unresolved`（`kind = "definition"`），移除该工作项并继续。
+2. 定位并完整读取 dispatcher 定义：已知 `dispatcher_file` / `dispatcher_line` 时直接 Read 该文件，从签名行读到配对的闭合 `}`；否则按「正则/词边界搜索」在 scope 内搜索精确名称，只接受带完整函数体的定义（调用、声明、注释、字符串中的同名文本不算），并读完整函数体。C++ 限定名找不到定义时，在 scope 内的类体中搜索未限定方法名，但记录限定名。定义不在 scope 内或无法唯一确定 → 记 `unresolved`（`kind = "definition"`），移除该工作项并继续。
 3. 按 3.4 确定 `effective_outer`。
 4. 识别函数体内的全部分发结构（见 3.3）。
 5. 对每个分支依次执行：
@@ -1096,6 +1095,6 @@ codegraph 未安装/未配置 → 用常规工具代替，不中断分析。
 ```
 
 1. 初始化与 scope 生成正常，`tmp/scope_files.txt` 共 127 个文件。
-2. 阶段一在 scope 内搜索 `"demo_service_typo"`（`xargs -r -a "<out>/tmp/scope_files.txt" -d '\n' grep -I -H -n -F '"demo_service_typo"'`），0 命中。
+2. 阶段一按「精确字符串搜索」查找 `"demo_service_typo"`，0 命中。
 3. 按第四章写 `progress.error = {code: "service_not_found", message: ..., evidence: ...}`：`message` 记录 scope 文件数 127 与搜索模式 `"demo_service_typo"`，`evidence` 明确写“0 命中”；保持 `phase = locate_entry`，不写 `entry_state.json`，停止。
 4. 报告：`service_not_found`，分析范围 127 个文件，已搜索模式 `"demo_service_typo"`；建议检查 service_name 拼写（如 `demo_service`），并确认 `clean_code.txt` 覆盖了该驱动的定义文件。
