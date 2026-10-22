@@ -627,7 +627,7 @@ C++ 间接调用、虚函数、函数指针、重载等解析细节可参考 tai
 - `bind.status`：`pending` / `in_progress` / `completed`。
 - `stub` 可以为 `null`。
 - 阶段二可重复执行（幂等）：中断后重跑并覆盖，不影响后续。
-- 恢复时校验 `entry_state.service_name` 与当前 `service_name` 一致；不一致视为状态损坏，报 `state_io_error` 并停止，不混用旧状态。
+- 恢复时校验 `entry_state.service_name` 与当前 `service_name` 一致；不一致视为身份不一致，报 `state_conflict` 并停止，不混用旧状态。
 
 ### 10.3 trace_state.json
 
@@ -710,30 +710,39 @@ C++ 间接调用、虚函数、函数指针、重载等解析细节可参考 tai
 - cmdId 用例状态为 `pending` / `analyzed`；`default` 分支单独记入 `default_cases`。
 - `trace_state.status` 含义：`in_progress` → 继续追踪；`self_check` → 完成或重做自检；`completed` → 可组装输出。
 - `trace_state 完整` 的定义：`status == completed` 且 `queue` 为空，且 `counters` 与实际数组长度一致。
-- 恢复时校验 `trace_state.service_name` 与当前 `service_name` 一致；不一致视为状态损坏，报 `state_io_error` 并停止。
+- 恢复时校验 `trace_state.service_name` 与当前 `service_name` 一致；不一致视为身份不一致，报 `state_conflict` 并停止。
 
 ### 10.4 恢复流程
 
+**状态文件问题分类**
+
+- 缺失：文件不存在 → 按恢复流程重建对应阶段。
+- 不可解析：文件存在但 JSON 解析失败 → 报 `state_io_error`，停止，不自动清空。
+- 身份不一致：JSON 可解析，但 service_name/project_dir 与当前调用不一致 → 报 `state_conflict`，停止，不混用旧状态。
+- 内容不完整：JSON 可解析、身份一致，但缺少该阶段必需字段 → 视为该阶段未完成，按恢复流程重跑对应阶段。
+
+“有效 entry_state”：JSON 可解析、service_name 匹配、entry 存在且 module_name 匹配。
+“有效 trace_state”：JSON 可解析、service_name 匹配、status 为 in_progress/self_check/completed、queue/cases/handlers/default_cases/unresolved/dispatch_cache/visited 均为数组。
+
 1. 双方法检查 progress.json：不存在 → 全新分析；存在 → 继续。
-2. 校验 project_dir 和 service_name 与当前调用一致；不一致 → 报错 state_conflict，停止，不删除旧状态。
+2. 校验 project_dir/service_name 与当前调用一致；不一致 → 报 state_conflict；progress.json 不可解析 → 报 state_io_error；均停止，不删除旧状态。
 3. phase = done → 双方法确认最终输出存在：
    - 存在 → 报告完成，停止；
-   - 不存在且 trace_state 完整 → 从 trace_state 重新组装输出；
+   - 不存在且 trace_state 完整（status == completed、queue 为空、counters 与实际数组一致）→ 从 trace_state 重新组装输出；
    - 不存在且 trace_state 不完整 → 回到 trace_dispatch，按 trace_state.status 继续。
-4. 按 phase 恢复：
-   - locate_entry：entry_state 已有匹配 entry → 跳到 analyze_bind；entry_state 缺失/损坏/无匹配 entry → 重跑阶段一。
-   - analyze_bind：entry_state 有效且 bind.status == completed 且 dispatch_functions 非空 → 跳到 trace_dispatch；entry_state 缺失/损坏/无 entry → 回到 locate_entry；否则重跑阶段二。
-   - trace_dispatch：trace_state 存在且 service_name 匹配 → 按 status 处理：
+4. 按 phase 恢复（先按“状态文件问题分类”处理当前阶段依赖的状态文件）：
+   - locate_entry：entry_state 有效且 entry 存在 → 跳到 analyze_bind；entry_state 缺失或内容不完整 → 重跑阶段一；不可解析 → state_io_error；身份不一致 → state_conflict。
+   - analyze_bind：entry_state 有效且 bind.status == completed 且 dispatch_functions 非空 → 跳到 trace_dispatch；entry_state 有效但 bind 未完成 → 重跑阶段二；entry_state 缺失或内容不完整（无 entry）→ 回到 locate_entry；不可解析 → state_io_error；身份不一致 → state_conflict。
+   - trace_dispatch：trace_state 有效 → 按 status 处理：
        in_progress → 将 in_progress 工作项置回 pending，从第一个待处理项继续；跳过已 analyzed 的用例；queue 空 → 进入自检；
        self_check → 完成或重做自检（见第八章）；
        completed → 进入 output；
-     trace_state 缺失/损坏 → entry_state 有效则从 entry_state 重新初始化队列，否则回到 locate_entry。
-   - output：trace_state.status == completed 才组装输出；status == self_check → 先完成自检；status == in_progress 或 trace_state 缺失 → 回到 trace_dispatch。成功后置 done。
-5. 加载后对照 counters 与实际数组长度；不一致以实际内容为准，不清空、不猜测性修复。
+     trace_state 缺失或内容不完整 → 若 entry_state 有效且 bind.status == completed 且 dispatch_functions 非空，从 entry_state 重新初始化队列；否则回到 locate_entry；不可解析 → state_io_error；身份不一致 → state_conflict。
+   - output：trace_state 有效且 status == completed 才组装输出；status == self_check → 先完成自检；status == in_progress → 回到 trace_dispatch；trace_state 缺失或内容不完整 → 回到 trace_dispatch；不可解析 → state_io_error；身份不一致 → state_conflict。成功后置 done。
+5. 加载 trace_state 后重新计算 counters（queue_remaining = queue.length；cases_total = cases.length；handlers_total = handlers.length；unresolved_total = unresolved.length）；与实际不一致时以实际数组为准，并将重算后的 counters 写回 state；用重算结果判断 trace_state 完整。
 6. 关键文件存在性一律双方法确认；结果无法判断 → 停止并报告。
 7. 状态文件采用“先写 .tmp 再 mv”的方式覆盖，避免中断产生半截 JSON。
-8. 状态文件 JSON 解析失败 → 报 state_io_error 并停止，不自动清空。
-9. 存在与当前 project_dir/service_name 匹配的 progress.json 时，按恢复流程继续，不重新生成 scope 或 scope 文件；只有全新分析才重建 scope，除非恢复步骤明确要求重建。若 progress.json 匹配但 scope_files.txt 缺失，重建 scope 并更新 progress.scope。无 clean_code.txt 时 scope_roots = null，旧的 scope_roots.txt 删除或忽略。
+8. 存在与当前 project_dir/service_name 匹配的 progress.json 时，按恢复流程继续，不重新生成 scope 或 scope 文件；只有全新分析才重建 scope，除非恢复步骤明确要求重建。若 progress.json 匹配但 scope_files.txt 缺失，重建 scope 并更新 progress.scope。无 clean_code.txt 时 scope_roots = null，旧的 scope_roots.txt 删除或忽略。
 
 ### 10.5 全新分析与旧输出
 
@@ -759,8 +768,8 @@ C++ 间接调用、虚函数、函数指针、重载等解析细节可参考 tai
 | `bind_definition_not_found` | Bind 函数体不在 scope 内 | 报告，结束 |
 | `bind_ambiguous` | 多个同名 Bind 定义无法区分 | 列出候选，结束 |
 | `dispatch_not_found` | 找不到 Dispatch 函数 | 报告，结束 |
-| `state_conflict` | progress 中的 project/service 与当前调用不一致 | 报告，结束，不删除旧状态 |
-| `state_io_error` | 状态文件读写失败 | 报告，结束 |
+| `state_conflict` | progress/entry_state/trace_state 的 project_dir/service_name 与当前调用不一致 | 报告，结束，不删除旧状态 |
+| `state_io_error` | 状态文件读写失败或 JSON 不可解析 | 报告，结束 |
 | `output_write_failed` | 最终 JSON 写入或 mv 失败 | 报告，保留 phase=output，便于重试 |
 
 ### 11.2 分支级问题（不终止整体分析）
@@ -777,7 +786,7 @@ C++ 间接调用、虚函数、函数指针、重载等解析细节可参考 tai
 
 ## 12. 自检与完成标准
 
-自检开始前将 `trace_state.status` 置为 `self_check`；全部通过后置为 `completed`，再写最终 JSON。
+自检开始前将 `trace_state.status` 置为 `self_check`；全部通过后置为 `completed`，并将 `progress.phase` 置为 `output`；最终 JSON 写成功后将 `progress.phase` 置为 `done`。
 
 输出前逐项自检，全部通过才写最终 JSON：
 
