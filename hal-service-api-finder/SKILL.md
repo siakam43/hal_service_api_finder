@@ -401,13 +401,8 @@ grep -I -H -n -E "<pattern>" "<file>"
 
 ### 精确搜索
 
-按第三章“方式一”在 scope 内搜索带双引号的完整字面量 `"<service_name>"`（`<out>` 定义同第三章）：
+按「精确字符串搜索」查找带双引号的完整字面量 `"<service_name>"`。
 
-```bash
-xargs -r -a "<out>/tmp/scope_files.txt" -d '\n' grep -I -H -n -F '"<service_name>"'
-```
-
-- 只允许搜索 `scope_files.txt` 中的文件；禁止 `grep -rn <project_dir>` 或任何等价的全仓搜索。`scope_roots.txt` 非 null 时可改用第三章“方式二”，但最终仍以 `scope_files.txt` 为硬边界。
 - 每个命中都必须用 Read 读取至少 30 行上下文（`offset=max(1, 命中行-15)`，`limit` 不少于 31）；向上读到初始化器声明行，向下读到闭合 `};`。不得只凭 grep 行下结论。
 - 一个命中只有同时满足以下条件才成为候选：
   1. 命中行是 `.moduleName` 成员初始化（允许 `.moduleName=...` 等空白差异），引号内字符串与 `<service_name>` 完全相等（区分大小写，`grep -F` 已按字面量匹配）；
@@ -439,11 +434,7 @@ HDF_INIT(g_DemoDriverEntry);
 
 ### 注册形式确认
 
-对每个候选的 `variable`，按第三章“方式一”在 scope 内搜索其变量名（用 `-w` 避免子串误命中）：
-
-```bash
-xargs -r -a "<out>/tmp/scope_files.txt" -d '\n' grep -I -H -n -E -w "<entry_var>"
-```
+对每个候选的 `variable`，按「正则/词边界搜索」查找其变量名（加 `-w` 避免子串误命中）。
 
 对每个引用读取足够上下文（至少覆盖其所在语句或初始化器），按以下优先级判定，命中即停：
 
