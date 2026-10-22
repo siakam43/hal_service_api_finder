@@ -49,6 +49,7 @@ HdfDriverEntry.moduleName 精确定位
 - 两个参数均必填且不能为空；缺失任意一个，打印用法并结束。
 - `project_dir` 必须是已存在的目录；相对路径转换为绝对路径后使用。
 - `service_name` 是 `HdfDriverEntry.moduleName` 的精确字符串，区分大小写，不做模糊匹配、不做大小写归一化。
+- `service_name` 不得包含 `/`、`\`、换行、NUL 或引号；包含这些字符 → 报错 `usage_error` 并结束。
 - 参数多于两个时，打印用法并结束。
 
 ### 3.2 输出位置
@@ -117,25 +118,34 @@ locate_entry → analyze_bind → trace_dispatch → output → done
 **硬边界规则：**
 
 - clean_code.txt 存在时，**不得分析或搜索列表以外的源文件**。
-- 所有入口、Bind、Dispatch、接口函数定义、宏定义的查找都只能在 scope 内进行；范围外一律视为“未找到”。
-- 后续 grep 只允许两种方式：
+- 所有入口、Bind、Dispatch、接口函数定义、宏定义的查找都只能在 scope 内进行。
+- 范围外不搜索；已知目标在范围外记入 `unresolved`，不输出、不臆造。
+
+**搜索纪律（适用于所有范围分支）：**
+
+- 所有代码搜索只允许在 `scope_files.txt` 列出的文件内进行；`scope_roots.txt` 非 null 时才允许按根目录搜索。
+- `grep -I` 必须保留，跳过二进制文件，避免大工程中无意义的慢搜索。
+- 两种搜索位置模板（文件参数必须来自 scope 清单；允许附加 `-w`、`-E`、`-F`、`-H`、`--` 等 grep 参数），其中 `<out>` = `<project_dir>/.ethunter_out/hal-service-api-finder`：
 
 ```bash
-# 方式一：对精确文件清单分批 grep
-xargs -r -a "<out>/tmp/scope_files.txt" -d '\n' grep -I -n -F "<pattern>" 2>/dev/null
+# 方式一：精确文件清单（-H 保证输出带文件名）
+xargs -r -a "<out>/tmp/scope_files.txt" -d '\n' grep -I -H -n -F "<pattern>"
 
-# 方式二：只对原始文件/文件夹条目 grep
-xargs -r -a "<out>/tmp/scope_roots.txt" -d '\n' grep -I -rn -F "<pattern>" 2>/dev/null
+# 方式二：原始根目录，仅 scope_roots.txt 非 null 时使用
+xargs -r -a "<out>/tmp/scope_roots.txt" -d '\n' grep -I -rn -F "<pattern>"
 ```
 
-- 禁止 `grep -rn <project_dir>` 或任何等价的全仓搜索。
-- 使用 `grep -I` 跳过二进制文件，避免大工程中无意义的慢搜索。
+- 需要正则/词边界时，把 `-F` 换成 `-E` 并追加 `-w` 等参数，但文件参数仍必须来自上述清单。
+- 禁止 `grep -rn <project_dir>`、`rg <project_dir>`、`find <project_dir> -exec grep` 等任何等价的全仓搜索。
+- `xargs`/`grep` 退出码 1 或 123 表示“没有匹配”，不是工具失败；权限/读取错误应如实报告。
+- 不得用 `2>/dev/null` 隐藏错误。
 - codegraph 返回的每个文件都必须按 `scope_files.txt` 过滤；范围外的结果直接丢弃，不读取、不记录、不追踪。
 
 ### 5.2 clean_code.txt 不存在
 
-1. `.ethunter_out/.etignore` 存在：按 C/C++ 文件类型 find，再按 .etignore 规则排除，结果写入 scope_files.txt。
-2. `.etignore` 也不存在：直接 find C/C++ 文件，结果写入 scope_files.txt。
+1. `.ethunter_out/.etignore` 存在：按下方 find 命令收集 C/C++ 文件，再按 `.etignore` 规则排除；`.etignore` 语法与 `.gitignore` 一致。
+2. `.etignore` 也不存在：直接使用下方 find 命令收集 C/C++ 文件。
+3. 两种情况的 find 结果都规范化为绝对路径、去重、排序后写入 `scope_files.txt`；结果为空 → 报错 `empty_scope` 并结束。
 
 C/C++ 扩展名集合：
 
@@ -143,7 +153,13 @@ C/C++ 扩展名集合：
 .c .h .cpp .cxx .cc .hpp .hxx .hh .inl .ipp
 ```
 
-无 clean_code.txt 时，`scope_roots` 置为 `null`，该场景不使用根目录 grep，统一使用 `scope_files.txt`。
+find 模板：
+
+```bash
+find <project_dir> -type f \( -name "*.c" -o -name "*.h" -o -name "*.cpp" -o -name "*.cxx" -o -name "*.cc" -o -name "*.hpp" -o -name "*.hxx" -o -name "*.hh" -o -name "*.inl" -o -name "*.ipp" \)
+```
+
+无 clean_code.txt 时，`scope_roots` 置为 `null`，该场景不使用根目录 grep，统一使用 `scope_files.txt`。若存在旧的 `tmp/scope_roots.txt`，删除或忽略，避免陈旧状态被误用。
 
 ### 5.3 macro.json
 
@@ -151,6 +167,8 @@ C/C++ 扩展名集合：
 - 按需查阅，不预先全量读取。
 - 内容仅代表编译指令中 `-D` 等动态定义的宏，不是全部宏。
 - 遇到 `#ifdef` / `#if` 时：先在代码中追溯宏定义，再查 macro.json；两处都找不到，默认分析该分支（不排除）。
+- `macro.json` 不存在是正常情况，直接继续分析。
+- `#ifdef` 无法判断时分析受保护分支；`#if/#else` 无法判断时两个分支都分析（宁可多分析，不可漏）。
 
 ### 5.4 codegraph
 
@@ -695,6 +713,7 @@ C++ 间接调用、虚函数、函数指针、重载等解析细节可参考 tai
 5. 加载后对照 `counters` 与实际数组长度；不一致以实际内容为准，不清空、不猜测性修复。
 6. 关键文件存在性一律双方法确认；结果无法判断 → 停止并报告。
 7. 状态文件采用“先写 `.tmp` 再 `mv`”的方式覆盖，避免中断产生半截 JSON。
+8. 存在与当前 `project_dir`/`service_name` 匹配的 `progress.json` 时，按恢复流程继续，不重新生成 scope 或 scope 文件；只有全新分析才重新执行第 5 章的范围构建，除非恢复步骤明确要求重建。
 
 ### 10.5 全新分析与旧输出
 
@@ -702,6 +721,7 @@ C++ 间接调用、虚函数、函数指针、重载等解析细节可参考 tai
 - `progress.json` 存在但 phase 未完成 → 严格按恢复流程继续，不从头重跑。
 - 用户若要强制全新分析，删除 `progress.json` 与 `tmp/`；最终输出会在完成时覆盖。
 - 完成态 state 保留，不删除，支持“输出丢失后补做输出”和问题诊断。
+- 恢复或新分析中若 `scope_roots = null`（无 clean_code.txt），旧的 `tmp/scope_roots.txt` 必须删除或忽略，禁止据此按根目录搜索。
 
 ## 11. 错误处理
 
