@@ -1000,7 +1000,7 @@ Replace the entire content of section 十二 with:
 - [ ] **Step 5: Verify Task 7**
 
 ```bash
-sed -n '/^## 九、/,$p' hal-service-api-finder/SKILL.md | grep -n 'progress\|entry_state\|trace_state\|state_conflict\|state_io_error\|断点续跑\|恢复' || echo 'no old state references in sections 9-12'
+sed -n '/^## 九、/,$p' hal-service-api-finder/SKILL.md | grep -n -E 'progress|entry_state|trace_state|state_conflict|state_io_error|断点续跑|恢复流程|恢复检查' || echo 'no old state references in sections 9-12'
 grep -n 'snapshot_write_failed\|01_entry.json\|02_bind.json\|03_trace.json' hal-service-api-finder/SKILL.md | tail -20
 grep -c '^## ' hal-service-api-finder/SKILL.md
 ```
