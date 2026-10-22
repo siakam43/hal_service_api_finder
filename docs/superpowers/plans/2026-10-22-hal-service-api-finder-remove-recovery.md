@@ -883,12 +883,40 @@ git -c user.name=siakam43 -c user.email=429872468@qq.com commit -m "docs(hal-ser
 Replace the `Bash` / `Read` / `Write` rows with:
 
 ```text
-| `Bash` | find/grep/xargs/ls/mkdir/mv/rm，scope 内搜索、备份/清理输出目录 |
-| `Read` | 读取源码、macro.json、阶段快照 |
-| `Write` | 写入 01_entry.json、02_bind.json、03_trace.json、error.json、最终 JSON |
+| `Bash` | find/grep/xargs/ast-grep/ls/mkdir/mv/rm，scope 内搜索、备份/清理输出目录 |
+| `Read` | 读取源码、macro.json、clean_code.txt/.etignore、阶段快照、待回读的临时 JSON |
+| `Write` | 写入 scope_files.txt、scope_roots.txt、01_entry.json、02_bind.json、03_trace.json、error.json、最终 JSON（含临时文件） |
 ```
 
-- [ ] **Step 2: Update constraints and error table (section 十)**
+- [ ] **Step 2: Update scope generation failure handling (section 三)**
+
+In the clean_code.txt branch, replace steps 5-6:
+
+```text
+5. 生成 <out>/scope_files.txt（展开后的绝对文件路径，去重、排序）和 <out>/scope_roots.txt（原始文件/文件夹条目，去重、排序）。
+6. scope 为空 → 报错 empty_scope 并结束。
+```
+
+with:
+
+```text
+5. 生成 <out>/scope_files.txt（展开后的绝对文件路径，去重、排序）和 <out>/scope_roots.txt（原始文件/文件夹条目，去重、排序）；写入失败 → 写 `error.json`（`phase = "init"`，`code = "internal_error"`），停止。
+6. scope 为空 → 写 `error.json`（`phase = "init"`，`code = "empty_scope"`），停止。
+```
+
+In the clean_code.txt-absent branch, replace step 3:
+
+```text
+3. 两种情况的 find 结果都规范化为绝对路径、去重、排序后写入 `<out>/scope_files.txt`；结果为空 → 报错 `empty_scope` 并结束。
+```
+
+with:
+
+```text
+3. 两种情况的 find 结果都规范化为绝对路径、去重、排序后写入 `<out>/scope_files.txt`；写入失败 → 写 `error.json`（`phase = "init"`，`code = "internal_error"`），停止；结果为空 → 写 `error.json`（`phase = "init"`，`code = "empty_scope"`），停止。
+```
+
+- [ ] **Step 3: Update constraints and error table (section 十)**
 
 Replace constraint 8:
 
@@ -920,16 +948,13 @@ Add a row:
 | `internal_error` | 工具/文件 I/O 或无法继续读取源码等不可恢复错误 | 报告，结束 |
 ```
 
-Update `output_write_failed` to:
+Update these error-table rows to:
 
 ```text
-| `output_write_failed` | 最终 JSON 写入、回读或 mv 失败 | 报告，结束 |
-```
-
-Update `self_check_failed` to:
-
-```text
-| `self_check_failed` | 自检清单失败 | 报告，结束，不写最终 JSON |
+| `empty_scope` | 分析范围为空 | 写 error.json（phase = init），报告，结束 |
+| `bind_definition_not_found` | 宏/包装无法展开，或展开后没有带完整函数体的 Bind 定义 | 报告，结束 |
+| `output_write_failed` | 最终 JSON 写入、回读、mv 或最终文件存在性确认失败 | 报告，结束 |
+| `self_check_failed` | 自检清单第 1-6 项失败 | 报告，结束，不写最终 JSON |
 ```
 
 Update the terminology `中间结果` row to:
@@ -938,7 +963,7 @@ Update the terminology `中间结果` row to:
 | 中间结果 | `scope_files.txt`、`scope_roots.txt`、`01_entry.json`、`02_bind.json`、`03_trace.json`、`error.json` 等调试文件 |
 ```
 
-- [ ] **Step 3: Update anti-rationalization (section 十一)**
+- [ ] **Step 4: Update anti-rationalization (section 十一)**
 
 Replace:
 
@@ -954,7 +979,7 @@ with:
 | “想复用上次结果” | 每次执行先备份旧输出目录，再从零分析，不复用历史结果。 |
 ```
 
-- [ ] **Step 4: Rewrite the examples (section 十二)**
+- [ ] **Step 5: Rewrite the examples (section 十二)**
 
 Replace the entire content of section 十二 with:
 
@@ -967,7 +992,7 @@ Replace the entire content of section 十二 with:
 /hal-service-api-finder /srv/ohos/drivers demo_service
 ```
 
-1. 初始化：校验参数；若 `/srv/ohos/drivers/.ethunter_out/hal-service-api-finder` 已存在，先备份为 `..._bak`，再新建空目录；确定分析范围并生成 `scope_files.txt`（存在 `clean_code.txt` 时另生成 `scope_roots.txt`）。
+1. 初始化：校验参数；若 `/srv/ohos/drivers/.ethunter_out/hal-service-api-finder` 已存在，先删除旧 `<out>_bak`（若存在），再把 `<out>` 备份为 `<out>_bak`，新建空目录；确定分析范围并生成 `<out>/scope_files.txt`（存在 `clean_code.txt` 时另生成 `<out>/scope_roots.txt`）。
 2. 阶段一：在 scope 内搜索 `"demo_service"`，定位 `struct HdfDriverEntry g_DemoDriverEntry = {...}` 与 `HDF_INIT(g_DemoDriverEntry)`；写 `<out>/01_entry.json`。
 3. 阶段二：定位 `HdfDemoDriverBind` 定义，识别 Host 类型与 `ioService.Dispatch = DemoDriverDispatch`，提取 `IDemoInterface`、`DemoService`、`DemoInterfaceStub` 及其 `OnRemoteRequest`；写 `<out>/02_bind.json`。
 4. 阶段三：以 `DemoDriverDispatch` 初始化内存队列，追踪 `SendRequest` 到 `DemoInterfaceStub::OnRemoteRequest`，枚举 8 个 cmdId 用例并解析宏值；队列为空后写 `<out>/03_trace.json`。
@@ -991,23 +1016,24 @@ Replace the entire content of section 十二 with:
 /hal-service-api-finder /srv/ohos/drivers demo_service_typo
 ```
 
-1. 初始化与 scope 生成正常，`scope_files.txt` 共 127 个文件。
+1. 初始化与 scope 生成正常，`<out>/scope_files.txt` 共 127 个文件。
 2. 阶段一按「精确字符串搜索」查找 `"demo_service_typo"`，0 命中。
 3. 写 `<out>/error.json = {phase: "locate_entry", code: "service_not_found", message: ..., evidence: ...}`：`message` 记录 scope 文件数 127 与搜索模式 `"demo_service_typo"`，`evidence` 明确写“0 命中”；停止，不写 `01_entry.json`，不进入阶段二。
 4. 报告：`service_not_found`，分析范围 127 个文件，已搜索模式 `"demo_service_typo"`；建议检查 service_name 拼写（如 `demo_service`），并确认 `clean_code.txt` 覆盖了该驱动的定义文件。
 ````
 
-- [ ] **Step 5: Verify Task 7**
+- [ ] **Step 6: Verify Task 7**
 
 ```bash
+sed -n '/^## 三、/,/^## 四、/p' hal-service-api-finder/SKILL.md | grep -n 'internal_error\|empty_scope'
 sed -n '/^## 九、/,$p' hal-service-api-finder/SKILL.md | grep -n -E 'progress|entry_state|trace_state|state_conflict|state_io_error|断点续跑|恢复流程|恢复检查' || echo 'no old state references in sections 9-12'
 grep -n 'snapshot_write_failed\|01_entry.json\|02_bind.json\|03_trace.json' hal-service-api-finder/SKILL.md | tail -20
 grep -c '^## ' hal-service-api-finder/SKILL.md
 ```
 
-Expected: no old state references in sections 9-12; new snapshot names present; heading count 12.
+Expected: section 三 contains both `internal_error` and `empty_scope` handling phrases; no old state references in sections 9-12; new snapshot names present; heading count 12.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add hal-service-api-finder/SKILL.md

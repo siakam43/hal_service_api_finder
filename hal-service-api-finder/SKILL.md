@@ -86,8 +86,8 @@ description: 当用户调用 /hal-service-api-finder <project_dir> <service_name
 2. 以 / 开头为绝对路径，否则拼接为 <project_dir>/<行内容>。
 3. 路径去重、规范化（分隔符统一为 /，去掉前导 ./）。
 4. 普通文件加入 scope；文件夹递归展开为其中全部常规文件；不存在的路径忽略。
-5. 生成 <out>/scope_files.txt（展开后的绝对文件路径，去重、排序）和 <out>/scope_roots.txt（原始文件/文件夹条目，去重、排序）。
-6. scope 为空 → 报错 empty_scope 并结束。
+5. 生成 <out>/scope_files.txt（展开后的绝对文件路径，去重、排序）和 <out>/scope_roots.txt（原始文件/文件夹条目，去重、排序）；写入失败 → 写 `error.json`（`phase = "init"`，`code = "internal_error"`），停止。
+6. scope 为空 → 写 `error.json`（`phase = "init"`，`code = "empty_scope"`），停止。
 
 硬边界规则：
 - clean_code.txt 存在时，不得分析或搜索列表以外的源文件。
@@ -99,7 +99,7 @@ description: 当用户调用 /hal-service-api-finder <project_dir> <service_name
 
 1. `.ethunter_out/.etignore` 存在：按下方 find 命令收集 C/C++ 文件，再按 `.etignore` 规则排除；`.etignore` 语法与 `.gitignore` 一致。
 2. `.etignore` 也不存在：直接使用下方 find 命令收集 C/C++ 文件。
-3. 两种情况的 find 结果都规范化为绝对路径、去重、排序后写入 `<out>/scope_files.txt`；结果为空 → 报错 `empty_scope` 并结束。
+3. 两种情况的 find 结果都规范化为绝对路径、去重、排序后写入 `<out>/scope_files.txt`；写入失败 → 写 `error.json`（`phase = "init"`，`code = "internal_error"`），停止；结果为空 → 写 `error.json`（`phase = "init"`，`code = "empty_scope"`），停止。
 
 C/C++ 扩展名：
 .c .h .cpp .cxx .cc .hpp .hxx .hh .inl .ipp
@@ -906,9 +906,9 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 
 | 工具 | 用途 |
 |------|------|
-| `Bash` | find/grep/xargs/ls/mkdir/mv/rm，scope 内搜索、备份/清理输出目录 |
-| `Read` | 读取源码、macro.json、阶段快照 |
-| `Write` | 写入 01_entry.json、02_bind.json、03_trace.json、error.json、最终 JSON |
+| `Bash` | find/grep/xargs/ast-grep/ls/mkdir/mv/rm，scope 内搜索、备份/清理输出目录 |
+| `Read` | 读取源码、macro.json、clean_code.txt/.etignore、阶段快照、待回读的临时 JSON |
+| `Write` | 写入 scope_files.txt、scope_roots.txt、01_entry.json、02_bind.json、03_trace.json、error.json、最终 JSON（含临时文件） |
 | `mcp__codegraph__codegraph_explore` | （可选）.codegraph 存在时优先的代码探索工具 |
 | `mcp__plugin_oh-my-claudecode_t__ast_grep_search` | （可选）AST 模式搜索 |
 
@@ -934,16 +934,16 @@ codegraph 未安装/未配置 → 用常规工具代替，不中断分析。
 | `usage_error` | 参数缺失、过多、为空，或 service_name 含非法字符 | 打印用法，结束 |
 | `invalid_project_dir` | project_dir 不存在或不是目录 | 报告，结束 |
 | `output_dir_failed` | 备份旧输出目录或创建新输出目录失败 | 报告，结束 |
-| `empty_scope` | 分析范围为空 | 报告，结束 |
+| `empty_scope` | 分析范围为空 | 写 error.json（phase = init），报告，结束 |
 | `service_not_found` | 找不到 moduleName 精确匹配的 HdfDriverEntry | 报告范围文件数、搜索模式，结束 |
 | `multiple_matches` | 多个候选无法唯一确定 | 列出候选（变量、文件、行号），结束 |
 | `bind_not_found` | 入口结构体没有有效 `.Bind` | 报告，结束 |
-| `bind_definition_not_found` | Bind 函数体不在 scope 内 | 报告，结束 |
+| `bind_definition_not_found` | 宏/包装无法展开，或展开后没有带完整函数体的 Bind 定义 | 报告，结束 |
 | `bind_ambiguous` | 多个同名 Bind 定义无法区分 | 列出候选，结束 |
 | `dispatch_not_found` | 找不到 Dispatch 函数 | 报告，结束 |
 | `snapshot_write_failed` | 01_entry.json / 02_bind.json / 03_trace.json 写入失败 | 报告，结束 |
-| `output_write_failed` | 最终 JSON 写入、回读或 mv 失败 | 报告，结束 |
-| `self_check_failed` | 自检清单失败 | 报告，结束，不写最终 JSON |
+| `output_write_failed` | 最终 JSON 写入、回读、mv 或最终文件存在性确认失败 | 报告，结束 |
+| `self_check_failed` | 自检清单第 1-6 项失败 | 报告，结束，不写最终 JSON |
 | `internal_error` | 工具/文件 I/O 或无法继续读取源码等不可恢复错误 | 报告，结束 |
 
 ### 术语表
@@ -988,7 +988,7 @@ codegraph 未安装/未配置 → 用常规工具代替，不中断分析。
 /hal-service-api-finder /srv/ohos/drivers demo_service
 ```
 
-1. 初始化：校验参数；若 `/srv/ohos/drivers/.ethunter_out/hal-service-api-finder` 已存在，先备份为 `..._bak`，再新建空目录；确定分析范围并生成 `scope_files.txt`（存在 `clean_code.txt` 时另生成 `scope_roots.txt`）。
+1. 初始化：校验参数；若 `/srv/ohos/drivers/.ethunter_out/hal-service-api-finder` 已存在，先删除旧 `<out>_bak`（若存在），再把 `<out>` 备份为 `<out>_bak`，新建空目录；确定分析范围并生成 `<out>/scope_files.txt`（存在 `clean_code.txt` 时另生成 `<out>/scope_roots.txt`）。
 2. 阶段一：在 scope 内搜索 `"demo_service"`，定位 `struct HdfDriverEntry g_DemoDriverEntry = {...}` 与 `HDF_INIT(g_DemoDriverEntry)`；写 `<out>/01_entry.json`。
 3. 阶段二：定位 `HdfDemoDriverBind` 定义，识别 Host 类型与 `ioService.Dispatch = DemoDriverDispatch`，提取 `IDemoInterface`、`DemoService`、`DemoInterfaceStub` 及其 `OnRemoteRequest`；写 `<out>/02_bind.json`。
 4. 阶段三：以 `DemoDriverDispatch` 初始化内存队列，追踪 `SendRequest` 到 `DemoInterfaceStub::OnRemoteRequest`，枚举 8 个 cmdId 用例并解析宏值；队列为空后写 `<out>/03_trace.json`。
@@ -1012,7 +1012,7 @@ codegraph 未安装/未配置 → 用常规工具代替，不中断分析。
 /hal-service-api-finder /srv/ohos/drivers demo_service_typo
 ```
 
-1. 初始化与 scope 生成正常，`scope_files.txt` 共 127 个文件。
+1. 初始化与 scope 生成正常，`<out>/scope_files.txt` 共 127 个文件。
 2. 阶段一按「精确字符串搜索」查找 `"demo_service_typo"`，0 命中。
 3. 写 `<out>/error.json = {phase: "locate_entry", code: "service_not_found", message: ..., evidence: ...}`：`message` 记录 scope 文件数 127 与搜索模式 `"demo_service_typo"`，`evidence` 明确写“0 命中”；停止，不写 `01_entry.json`，不进入阶段二。
 4. 报告：`service_not_found`，分析范围 127 个文件，已搜索模式 `"demo_service_typo"`；建议检查 service_name 拼写（如 `demo_service`），并确认 `clean_code.txt` 覆盖了该驱动的定义文件。
