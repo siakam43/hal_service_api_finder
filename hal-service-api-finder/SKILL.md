@@ -50,6 +50,91 @@ description: 当用户调用 /hal-service-api-finder <project_dir> <service_name
 
 ## 三、初始化与分析范围
 
+### 参数解析
+
+1. 校验两个参数均非空：`<project_dir>` 与 `<service_name>` 缺失任意一个、为空或仅含空白字符、或参数多于两个时，打印用法并结束。
+2. 将 `<project_dir>` 解析为绝对路径：相对路径按当前工作目录展开并规范化，后续一律使用绝对路径。
+3. `<project_dir>` 不存在或不是目录 → 报错 `invalid_project_dir` 并结束，不创建任何输出。
+4. `<service_name>` 仅去除首尾空白，保持大小写与其余字符不变，用于后续精确匹配。
+
+### 输出目录初始化
+
+- 输出根目录：`<out>` = `<project_dir>/.ethunter_out/hal-service-api-finder`。
+- 执行 `mkdir -p <project_dir>/.ethunter_out/hal-service-api-finder/tmp`。
+- 创建失败（权限不足、只读文件系统、同名文件占用等）→ 报错 `output_dir_failed` 并结束。
+- 后续所有中间文件与最终 `<service_name>_api.json` 均写入 `<out>`。
+
+### 分析范围确定
+
+按以下优先级确定分析范围，命中即停止；范围一经生成即为本次分析的硬边界：
+
+1. 先用双方法检查 `<project_dir>/.ethunter_out/clean_code.txt`：存在则按“clean_code.txt 优先，且是硬边界”建立 scope。
+2. `clean_code.txt` 不存在时，检查 `<project_dir>/.ethunter_out/.etignore`：存在则全量 find C/C++ 文件并按 `.etignore` 规则排除。
+3. `.etignore` 也不存在时，直接全量 find C/C++ 文件。
+4. 无论走哪条分支，都必须生成 `tmp/scope_files.txt`；存在 `clean_code.txt` 时还必须生成 `tmp/scope_roots.txt`，否则 `scope_roots` 置为 null。
+
+### clean_code.txt 优先，且是硬边界
+
+双方法检查 <project_dir>/.ethunter_out/clean_code.txt 是否存在。
+
+存在时：
+1. 逐行读取，去掉首尾空白；忽略空行和以 # 开头的注释行。
+2. 以 / 开头为绝对路径，否则拼接为 <project_dir>/<行内容>。
+3. 路径去重、规范化（分隔符统一为 /，去掉前导 ./）。
+4. 普通文件加入 scope；文件夹递归展开为其中全部常规文件；不存在的路径忽略。
+5. 生成 tmp/scope_files.txt（展开后的绝对文件路径，去重、排序）和 tmp/scope_roots.txt（原始文件/文件夹条目，去重、排序）。
+6. scope 为空 → 报错 empty_scope 并结束。
+
+硬边界规则：
+- clean_code.txt 存在时，不得分析或搜索列表以外的源文件。
+- 入口、Bind、Dispatch、接口函数定义、宏定义的查找都只能在 scope 内进行；范围外一律视为“未找到”。
+- 后续 grep 只允许以下两种方式：
+
+```bash
+xargs -r -a "<out>/tmp/scope_files.txt" -d '\n' grep -I -n -F "<pattern>" 2>/dev/null
+xargs -r -a "<out>/tmp/scope_roots.txt" -d '\n' grep -I -rn -F "<pattern>" 2>/dev/null
+```
+
+- 其中 <out> = <project_dir>/.ethunter_out/hal-service-api-finder。
+- 禁止 grep -rn <project_dir> 或任何等价的全仓搜索。
+- 使用 grep -I 跳过二进制文件。
+- codegraph 返回的每个文件都必须按 scope_files.txt 过滤；范围外的结果直接丢弃。
+
+### clean_code.txt 不存在
+
+1. .ethunter_out/.etignore 存在：按 C/C++ 文件类型 find，再按 .etignore 规则排除，结果写入 scope_files.txt。
+2. .etignore 也不存在：直接 find C/C++ 文件，结果写入 scope_files.txt。
+
+C/C++ 扩展名：
+.c .h .cpp .cxx .cc .hpp .hxx .hh .inl .ipp
+
+无 clean_code.txt 时，scope_roots 置为 null，统一使用 scope_files.txt。
+
+### macro.json
+
+- 路径：<project_dir>/.ethunter_out/macro.json。
+- 按需查阅，不预先全量读取。
+- 仅代表编译指令中 -D 等动态定义的宏，不是全部宏。
+- 遇到 #ifdef / #if：先查代码，再查 macro.json；两处都没有定义，默认分析该分支。
+
+### codegraph
+
+- 双方法检查 <project_dir>/.codegraph 是否存在。
+- 存在时优先使用 mcp__codegraph__codegraph_explore。
+- 未安装/未配置 MCP → 使用 grep、find、Read、ast-grep，不中断分析。
+- codegraph 结果必须按 scope_files.txt 过滤。
+
+### 文件存在性检查
+
+关键文件/目录的存在性判断一律双方法交叉确认，禁止 test -f / [ -f ]：
+- 方法一：ls <path>
+- 方法二：Read <path>（目录返回目录类错误也视为存在）
+
+两次都确认存在 → 存在。
+两次都确认不存在 → 不存在，按规则跳过/新建。
+两次不一致 → 用 find 等第三种方法确认，取多数。
+两次都无法得出确定结论 → 立即停止并报告，不得假设缺失后继续。
+
 ## 四、任务恢复机制
 
 ## 五、阶段一：定位服务注册点
