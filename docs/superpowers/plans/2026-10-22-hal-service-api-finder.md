@@ -167,7 +167,7 @@ Include exactly these subsections and rules:
 中间结果：
 - progress.json
 - tmp/scope_files.txt
-- tmp/scope_roots.txt
+- tmp/scope_roots.txt（仅 clean_code.txt 分支存在）
 - tmp/entry_state.json
 - tmp/trace_state.json
 
@@ -210,9 +210,9 @@ git commit -m "docs(hal-service-api-finder): add principles, usage, and output"
 
 Include these subsections in order:
 
-1. **参数解析** — validate two non-empty args; resolve `project_dir` to an absolute path; reject missing/non-directory.
+1. **参数解析** — validate two non-empty args; resolve `project_dir` to an absolute path; reject missing/non-directory and service_name forbidden characters; use literal/quoted search.
 2. **输出目录初始化** — `mkdir -p <project_dir>/.ethunter_out/hal-service-api-finder/tmp`; failure is `output_dir_failed`.
-3. **分析范围确定** — clean_code.txt first, then `.etignore`, then full C/C++ find.
+3. **分析范围确定** — clean_code.txt first, then `.etignore`, then full C/C++ find; no clean_code → scope_roots = null; matching progress.json → recovery before scope regeneration.
 4. **macro.json** — on-demand only.
 5. **codegraph** — prefer if `.codegraph` exists; fallback tools otherwise.
 6. **文件存在性检查** — double-method rule.
@@ -331,7 +331,7 @@ grep -n 'clean_code.txt' hal-service-api-finder/SKILL.md
 grep -n 'scope_files.txt' hal-service-api-finder/SKILL.md
 grep -n 'scope_roots.txt' hal-service-api-finder/SKILL.md
 grep -n 'xargs -r -a' hal-service-api-finder/SKILL.md
-grep -n '禁止 grep -rn <project_dir>' hal-service-api-finder/SKILL.md
+grep -n '禁止.*grep -rn <project_dir>' hal-service-api-finder/SKILL.md
 grep -n '.etignore' hal-service-api-finder/SKILL.md
 grep -n '.codegraph' hal-service-api-finder/SKILL.md
 grep -n 'macro.json' hal-service-api-finder/SKILL.md
@@ -339,6 +339,10 @@ grep -n '双方法' hal-service-api-finder/SKILL.md
 grep -n '搜索纪律' hal-service-api-finder/SKILL.md
 grep -n '退出码 1 或 123' hal-service-api-finder/SKILL.md
 grep -n '\-H' hal-service-api-finder/SKILL.md
+grep -n 'empty_scope' hal-service-api-finder/SKILL.md
+grep -n 'scope_roots = null' hal-service-api-finder/SKILL.md
+grep -n 'service_name.*不得包含' hal-service-api-finder/SKILL.md
+grep -n 'unresolved' hal-service-api-finder/SKILL.md
 ```
 
 Expected: every command prints at least one matching line.
@@ -561,6 +565,7 @@ Include these exact steps under a `### 恢复流程` heading:
 5. 加载后对照 counters 与实际数组长度；不一致以实际内容为准，不清空、不猜测性修复。
 6. 关键文件存在性一律双方法确认；结果无法判断 → 停止并报告。
 7. 状态文件采用“先写 .tmp 再 mv”的方式覆盖，避免中断产生半截 JSON。
+8. 存在与当前 project_dir/service_name 匹配的 progress.json 时，按恢复流程继续，不重新生成 scope 或 scope 文件；只有全新分析才重建 scope，除非恢复步骤明确要求重建。无 clean_code.txt 时 scope_roots = null，旧的 scope_roots.txt 删除或忽略。
 ```
 
 Add a `### 全新分析与旧输出` subsection with:
@@ -977,7 +982,7 @@ Under a `### 全局错误码` heading, include exactly:
 
 | 错误码 | 触发条件 | 处理 |
 |--------|----------|------|
-| `usage_error` | 参数缺失、过多或为空 | 打印用法，结束 |
+| `usage_error` | 参数缺失、过多、为空，或 service_name 含非法字符 | 打印用法，结束 |
 | `invalid_project_dir` | project_dir 不存在或不是目录 | 报告，结束 |
 | `output_dir_failed` | 输出目录创建失败 | 报告，结束 |
 | `empty_scope` | 分析范围为空 | 报告，结束 |

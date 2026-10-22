@@ -58,7 +58,7 @@ HdfDriverEntry.moduleName 精确定位
 <project_dir>/.ethunter_out/hal-service-api-finder/
   progress.json
   tmp/scope_files.txt
-  tmp/scope_roots.txt
+  tmp/scope_roots.txt（仅 clean_code.txt 分支存在）
   tmp/entry_state.json
   tmp/trace_state.json
   <service_name>_api.json
@@ -139,7 +139,7 @@ xargs -r -a "<out>/tmp/scope_roots.txt" -d '\n' grep -I -rn -F "<pattern>"
 - 禁止 `grep -rn <project_dir>`、`rg <project_dir>`、`find <project_dir> -exec grep` 等任何等价的全仓搜索。
 - `xargs`/`grep` 退出码 1 或 123 表示“没有匹配”，不是工具失败；权限/读取错误应如实报告。
 - 不得用 `2>/dev/null` 隐藏错误。
-- codegraph 返回的每个文件都必须按 `scope_files.txt` 过滤；范围外的结果直接丢弃，不读取、不记录、不追踪。
+- codegraph 返回的每个文件都必须按 `scope_files.txt` 过滤；范围外的搜索命中直接丢弃，不读取、不记录；若分析中已明确知道某个目标定义在范围外，记入 `unresolved`。
 
 ### 5.2 clean_code.txt 不存在
 
@@ -729,7 +729,7 @@ C++ 间接调用、虚函数、函数指针、重载等解析细节可参考 tai
 
 | 错误码 | 触发条件 | 处理 |
 |--------|----------|------|
-| `usage_error` | 参数缺失、过多或为空 | 打印用法，结束 |
+| `usage_error` | 参数缺失、过多、为空，或 service_name 含非法字符 | 打印用法，结束 |
 | `invalid_project_dir` | project_dir 不存在或不是目录 | 报告，结束 |
 | `output_dir_failed` | 输出目录创建失败 | 报告，结束 |
 | `empty_scope` | 分析范围为空 | 报告，结束 |
