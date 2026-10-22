@@ -92,7 +92,7 @@ description: 当用户调用 /hal-service-api-finder <project_dir> <service_name
 - clean_code.txt 存在时，不得分析或搜索列表以外的源文件。
 - 入口、Bind、Dispatch、接口函数定义、宏定义的查找都只能在 scope 内进行。
 - 范围外不搜索；若已知目标在范围外，记入 `unresolved`，不输出、不臆造。
-- 搜索方式见下方 `### 搜索纪律（适用于所有范围分支）`。
+- 搜索方式见下方 `### 搜索方法与纪律`。
 
 ### clean_code.txt 不存在
 
@@ -109,27 +109,31 @@ find <project_dir> -type f \( -name "*.c" -o -name "*.h" -o -name "*.cpp" -o -na
 
 无 clean_code.txt 时，`scope_roots = null`；不使用 `scope_roots.txt`。若存在旧的 `scope_roots.txt`，删除或忽略，避免陈旧状态被误用。
 
-### 搜索纪律（适用于所有范围分支）
+### 搜索方法与纪律
 
-- 所有代码搜索只允许在 `scope_files.txt` 列出的文件内进行；`scope_roots.txt` 非 null 时才允许按根目录搜索。
-- `grep -I` 必须保留，跳过二进制文件。
-- 两种搜索位置模板（文件参数必须来自 scope 清单；允许附加 `-w`、`-E`、`-F`、`-H`、`--` 等 grep 参数）：
+所有阶段统一使用以下三种方法；后续只写方法名与参数，不再重复命令。其中 `<out>` = `<project_dir>/.ethunter_out/hal-service-api-finder`。
 
-其中 <out> = <project_dir>/.ethunter_out/hal-service-api-finder。
+1. 精确字符串搜索：在 scope 内查找字面量。
+2. 正则/词边界搜索：需要正则时把 `-F` 换成 `-E`；需要词边界时加 `-w`。
+3. 指定文件搜索：已知文件在 scope 内时使用。
 
 ```bash
-# 方式一：精确文件清单（-H 保证输出带文件名）
+# 1. 精确字符串搜索
 xargs -r -a "<out>/tmp/scope_files.txt" -d '\n' grep -I -H -n -F "<pattern>"
 
-# 方式二：原始根目录，仅 scope_roots.txt 非 null 时使用
-xargs -r -a "<out>/tmp/scope_roots.txt" -d '\n' grep -I -rn -F "<pattern>"
+# 2. 正则/词边界搜索
+xargs -r -a "<out>/tmp/scope_files.txt" -d '\n' grep -I -H -n -E "<pattern>"
+
+# 3. 指定文件搜索
+grep -I -H -n -E "<pattern>" "<file>"
 ```
 
-- 需要正则/词边界时，把 `-F` 换成 `-E` 并追加 `-w` 等参数，但文件参数仍必须来自上述清单。
-- 禁止 `grep -rn <project_dir>`、`rg <project_dir>`、`find <project_dir> -exec grep` 等任何等价的全仓搜索。
-- 不得用 `2>/dev/null` 隐藏错误；权限/读取错误必须如实报告。
-- `xargs`/`grep` 退出码 1 或 123 表示“没有匹配”，不是工具失败；权限/读取错误应如实报告。
-- codegraph 返回的每个文件都必须按 `scope_files.txt` 过滤；范围外的搜索命中直接丢弃，不读取、不记录；若分析中已明确知道某个目标定义在范围外，记入 `unresolved`。
+全局纪律：
+
+- 只搜索 `scope_files.txt` 中的文件；`scope_roots.txt` 非 null 时才允许按根目录搜索（把文件清单换成 `scope_roots.txt` 并加 `-r`）。
+- 禁止 `grep -rn <project_dir>`、`rg <project_dir>`、`find <project_dir> -exec grep` 等全仓搜索。
+- `grep -I` 保留，跳过二进制文件；不得用 `2>/dev/null` 隐藏错误；退出码 1/123 表示无匹配，不是失败。
+- codegraph 结果按 `scope_files.txt` 过滤；范围外搜索命中直接丢弃，已知范围外目标记 `unresolved`。
 
 ### macro.json
 
