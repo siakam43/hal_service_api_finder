@@ -759,6 +759,8 @@ git -c user.name=siakam43 -c user.email=429872468@qq.com commit -m "docs(hal-ser
 
 Replace `trace_state.handlers` with `03_trace.json` 的 `handlers` everywhere in section 8.1 (intro, field notes, assembly step 1).
 
+In the 8.1 intro, also replace `丢弃 ... 等仅用于状态追踪的字段` with `丢弃 ... 等仅用于定位与去重的字段`（即把“仅用于状态追踪的字段”改为“仅用于定位与去重的字段”）。
+
 Replace the sentence:
 
 ```text
@@ -775,6 +777,8 @@ Then replace any remaining `tmp/<service_name>_api.json.tmp` with `<out>/<servic
 
 - [ ] **Step 2: Remove status/phase transitions from 8.2**
 
+Also rename the heading `### 8.2 自检与状态切换` to `### 8.2 自检`.
+
 Replace the intro paragraph:
 
 ```text
@@ -784,7 +788,7 @@ Replace the intro paragraph:
 with:
 
 ```text
-自检直接基于内存中的追踪结果和 `03_trace.json`；不再有 `trace_state.status` 或 phase 转换。执行以下清单：
+自检直接基于内存中的追踪结果和 `03_trace.json`；不再有 status 字段或 phase 转换。执行以下清单：
 ```
 
 - [ ] **Step 3: Update the self-check checklist**
@@ -842,7 +846,7 @@ with:
 
 ```text
 - 自检任一失败 → 写 `error.json`（`phase = "output"`，`code = "self_check_failed"`，message/evidence 记录失败项编号与证据），停止；不得写最终 JSON。
-- 写临时文件、回读校验、`mv` 或最终文件存在性确认失败 → 写 `error.json`（`phase = "output"`，`code = "output_write_failed"`，evidence 记录临时/最终路径与失败动作），停止。
+- 写临时文件、回读校验、`mv` 或最终文件存在性确认失败 → 删除可能残留的 `<out>/<service_name>_api.json.tmp`，写 `error.json`（`phase = "output"`，`code = "output_write_failed"`，evidence 记录临时/最终路径与失败动作），停止。
 - 最终文件必须存在；无法确认存在即按 `output_write_failed` 处理，本次任务失败。
 ```
 

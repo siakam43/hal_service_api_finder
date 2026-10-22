@@ -803,11 +803,11 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 
 ## 八、输出与自检
 
-本阶段只做两件事：完成自检，然后把 `trace_state.handlers` 组装为最终 JSON 并写入磁盘。不新增分析、不展开接口函数、不修改追踪结论。
+本阶段只做两件事：完成自检，然后把 `03_trace.json` 的 `handlers` 组装为最终 JSON 并写入磁盘。不新增分析、不展开接口函数、不修改追踪结论。
 
 ### 8.1 输出 JSON
 
-最终输出：`<out>/<service_name>_api.json`。只从 `trace_state.handlers` 组装：丢弃 `definition_line` 等仅用于状态追踪的字段，每条记录仅保留以下四个字段。
+最终输出：`<out>/<service_name>_api.json`。只从 `03_trace.json` 的 `handlers` 组装：丢弃 `definition_line` 等仅用于定位与去重的字段，每条记录仅保留以下四个字段。
 
 ```json
 [
@@ -829,7 +829,7 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 | `interface_function` | string | 定义处的作用域限定名；lambda 用 `<lambda@绝对路径:行号>` |
 | `file` | string | 函数定义所在文件的绝对路径，必须在 scope_files 内 |
 
-- `cmd_id_value` 直接取自 `trace_state.handlers`，不重新解析；3.4 判定可计算的掩码/组合保留整数，只有范围、不可计算或无法解析时为 null。
+- `cmd_id_value` 直接取自 `03_trace.json` 的 `handlers`，不重新解析；3.4 判定可计算的掩码/组合保留整数，只有范围、不可计算或无法解析时为 null。
 - `cmd_id_macro` 也可以为 `"*"`（3.6 的无条件/内联处理）；此类记录按原样保留，`cmd_id_value` 为 null，正常参与去重与排序。仅 `default` 分支不输出。
 - 示例中的 `DemoInterfaceStubGetVersion` 是全局函数；若是命名空间/类成员，必须写定义处完整限定名。
 
@@ -842,58 +842,51 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 5. 服务存在但未识别到接口 → 输出 `[]`，报告 0 个接口。
 6. 不添加任何额外字段。
 7. UTF-8 编码，JSON 缩进 2 空格。
-8. 先写 `tmp/<service_name>_api.json.tmp`，Read 回读校验通过后 `mv` 为最终文件。
+8. 先写 `<out>/<service_name>_api.json.tmp`，Read 回读校验通过后 `mv` 为最终文件。
 9. 最终文件必须存在，否则本次任务失败。
 
 组装步骤：
 
-1. 遍历 `trace_state.handlers`，每条只取 `cmd_id_macro`、`cmd_id_value`、`interface_function`、`file`，其余字段一律丢弃。
+1. 遍历 `03_trace.json` 的 `handlers`，每条只取 `cmd_id_macro`、`cmd_id_value`、`interface_function`、`file`，其余字段一律丢弃。
 2. 按四元组 `(cmd_id_macro, cmd_id_value, interface_function, file)` 去重，完全相同的记录只保留一条；`cmd_id_value` 为 null 也参与比较。
 3. 按输出规则 3 排序；`cmd_id_value` 为 null 的记录排在全部整数之后，其余键按字符串升序比较。
 4. 没有记录时输出空数组 `[]`，不输出 null 或空文件。
-5. 输出规则中的 `tmp/...` 以 `<out>` 为基准，即临时文件为 `<out>/tmp/<service_name>_api.json.tmp`，最终文件为 `<out>/<service_name>_api.json`。
+5. 临时文件为 `<out>/<service_name>_api.json.tmp`，最终文件为 `<out>/<service_name>_api.json`。
 
-### 8.2 自检与状态切换
+### 8.2 自检
 
-自检开始前将 `trace_state.status` 置为 `self_check`（阶段三收尾应已置为该值；从恢复流程进入时先确认，按以下映射纠正：`in_progress` → 回到 `trace_dispatch` 继续；`completed` → 跳过自检，直接进入输出组装；`self_check` → 执行清单），先以 `<out>/tmp/trace_state.json.tmp` + `mv` 原子保存，再执行以下清单：
+自检直接基于内存中的追踪结果和 `03_trace.json`；不再有 status 字段或 phase 转换。执行以下清单：
 
-1. `queue` 为空，没有 `pending` / `in_progress` 工作项。
-2. 所有 `cases` 已 `analyzed`，或明确记录无目标/unresolved。
-3. 每个 `handlers` 条目都能在 scope_files 内定位到函数定义，且函数名为限定名。
-4. `default_cases` 没有混入 `handlers`。
-5. handlers 已按四元组去重，排序规则已执行。
-6. `unresolved` 已记录，数量与报告一致。
-7. 最终 JSON 恰好包含四个字段，无额外字段。
-8. 写临时文件后 Read 回读，核对数组长度、字段名、类型。
-9. `mv` 后双方法确认最终文件存在。
-10. 写最终 JSON 前将 `progress.phase` 置为 `output`；写成功后置为 `done`，所有阶段状态为 `completed`。
+1. 队列已处理完（所有工作项已从内存队列移除）。
+2. 每个 `handlers` 条目都能在 scope_files 内定位到函数定义，且函数名为限定名。
+3. `default_cases` 没有混入 `handlers`。
+4. handlers 已按四元组去重，排序规则已执行。
+5. `unresolved` 已记录，数量与报告一致。
+6. 最终 JSON 恰好包含四个字段，无额外字段。
+7. 写临时文件后 Read 回读，核对数组长度、字段名、类型。
+8. `mv` 后双方法确认最终文件存在。
 
 执行说明：
 
-- 第 1-4、6 项检查 `trace_state` 当前内容；第 5、7 项针对 8.1 组装后的最终数组核对。
-- 第 2 项执行时要求所有 `cases[i].status == "analyzed"`；3.9 已保证任一终止条件都会置 analyzed，出现非 analyzed 即自检失败。
-- 第 4 项执行时检查没有任何 handler 的 `cmd_id_macro == "default"`，且不存在仅由 `default_cases` 站点支撑的 handler；否则自检失败。
-- 第 3 项中 lambda 的 `interface_function` 以 `<lambda@绝对路径:行号>` 形式为合规；其余函数必须是定义处作用域限定名。每个条目都要按 `file` 与定义位置 Read 确认完整函数体，且 `file` 必须在 `scope_files.txt` 内。
-- 第 6 项的 unresolved 数量以 `trace_state.unresolved` 长度为准，并与完成报告一致。
-- 第 8 项回读后核对：数组长度等于去重后的记录数；每条键集合恰为四字段；`cmd_id_macro` / `interface_function` / `file` 为字符串，`cmd_id_value` 为整数或 null。必须读到文件末尾；若一次 Read 被截断，分页读取直到 EOF；截断视为回读失败。
-- 第 9 项的双方法按第三章“文件存在性检查”执行（`ls` + `Read`），禁止 `test -f` / `[ -f ]`。
+- 第 1-5 项检查内存中的追踪结果和 `03_trace.json`；第 6 项针对 8.1 组装后的最终数组核对。
+- 第 2 项中 lambda 的 `interface_function` 以 `<lambda@绝对路径:行号>` 形式为合规；其余函数必须是定义处作用域限定名。每个条目都要按 `file` 与定义位置 Read 确认完整函数体，且 `file` 必须在 `scope_files.txt` 内。
+- 第 3 项检查没有任何 handler 的 `cmd_id_macro == "default"`，且不存在仅由 `default_cases` 站点支撑的 handler。
+- 第 5 项 unresolved 数量以 `03_trace.json` 的 `unresolved` 长度为准，并与完成报告一致。
+- 第 7 项回读后核对：数组长度等于去重后的记录数；每条键集合恰为四字段；`cmd_id_macro` / `interface_function` / `file` 为字符串，`cmd_id_value` 为整数或 null。必须读到文件末尾；截断视为回读失败。
+- 第 8 项双方法确认最终文件存在（`ls` + `Read`），禁止 `test -f` / `[ -f ]`。
 
-执行顺序与状态切换：
+执行顺序：
 
-1. 阶段三收尾或恢复进入本章时，确认 `trace_state.status = self_check`，原子保存。
-2. 执行清单第 1-4、6 项。
-3. 按 8.1 组装最终数组，执行清单第 5、7 项。
-4. 第 1-7 项全部通过后：`trace_state.status = completed`，重算 counters（`queue_remaining`、`cases_total`、`handlers_total`、`unresolved_total`）并原子保存；随后设置 `progress.phase = output`、`trace_dispatch.status = completed`、`output.status = in_progress`、`error = null`，原子保存。只有 `trace_state.status == completed` 后才能置 `phase = output`。
-5. 写 `<out>/tmp/<service_name>_api.json.tmp`，执行清单第 8 项。
-6. `mv` 为最终文件，执行清单第 9 项。
-7. 执行清单第 10 项：`progress.phase = done`，`locate_entry.status`、`analyze_bind.status`、`trace_dispatch.status`、`output.status` 全部为 `completed`，`error = null`，原子保存。
-8. 按 8.3 输出完成报告。
+1. 执行清单第 1-5 项。
+2. 按 8.1 组装最终数组，执行清单第 6 项。
+3. 写 `<out>/<service_name>_api.json.tmp`，执行清单第 7 项。
+4. `mv` 为最终文件，执行清单第 8 项。
+5. 按 8.3 输出完成报告。
 
 失败处理：
 
-- 清单第 1-7 项任一失败 → 按第四章写 `progress.error`（`code = "self_check_failed"`，message/evidence 记录失败项编号与证据），`trace_state.status` 保持 `self_check`，`progress.phase` 保持 `trace_dispatch`（若已进入 `output` 则保持 `output`），停止；不得写最终 JSON。
-- 清单第 8-9 项（写临时文件、回读校验、`mv`、最终文件存在性确认）任一失败 → 写 `progress.error`（`code = "output_write_failed"`，evidence 记录临时/最终路径与失败动作），保持 `phase = output` 以便重试，停止；不得把 `phase` 置为 `done`。
-- 重试 `output_write_failed` 时从 `trace_state.handlers` 重新组装（结果幂等），覆盖临时文件后重新执行回读、`mv` 与存在性确认。
+- 自检任一失败 → 写 `error.json`（`phase = "output"`，`code = "self_check_failed"`，message/evidence 记录失败项编号与证据），停止；不得写最终 JSON。
+- 写临时文件、回读校验、`mv` 或最终文件存在性确认失败 → 删除可能残留的 `<out>/<service_name>_api.json.tmp`，写 `error.json`（`phase = "output"`，`code = "output_write_failed"`，evidence 记录临时/最终路径与失败动作），停止。
 - 最终文件必须存在；无法确认存在即按 `output_write_failed` 处理，本次任务失败。
 
 ### 8.3 完成报告
@@ -902,12 +895,12 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 
 - 分析范围文件数；
 - service_name、入口变量、Bind 函数、Dispatch 函数数量；
-- cmdId 用例数（取 `trace_state.cases.length`，不含 `default_cases`）；
+- cmdId 用例数（取 `03_trace.json` 的 `cases` 长度，不含 `default_cases`）；
 - 接口函数数量；
 - unresolved 数量；
 - 最终输出文件绝对路径。
 
-接口函数数量以最终 JSON 数组长度为准；unresolved 数量以 `trace_state.unresolved` 长度为准；服务存在但未识别到接口时报告 0 个接口，并说明最终 JSON 为 `[]`。
+接口函数数量以最终 JSON 数组长度为准；unresolved 数量以 `03_trace.json` 的 `unresolved` 长度为准；服务存在但未识别到接口时报告 0 个接口，并说明最终 JSON 为 `[]`。
 
 ## 九、权限申请
 
