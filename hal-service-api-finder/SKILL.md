@@ -1005,7 +1005,7 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 
 | 工具 | 用途 |
 |------|------|
-| `Bash` | find/grep/xargs/ls/mkdir/mv，scope 内搜索与状态落盘 |
+| `Bash` | find/grep/xargs/ls/mkdir/mv/rm，scope 内搜索与状态落盘 |
 | `Read` | 读取源码、macro.json、状态文件 |
 | `Write` | 写入 progress.json、entry_state.json、trace_state.json、最终 JSON |
 | `mcp__codegraph__codegraph_explore` | （可选）.codegraph 存在时优先的代码探索工具 |
@@ -1018,7 +1018,7 @@ codegraph 未安装/未配置 → 用常规工具代替，不中断分析。
 1. 全部由主 agent 完成，不调用 sub-agent。
 2. 质量优先；不设深度/扇出上限；所有分支追到接口函数或明确终止条件。
 3. clean_code.txt 是硬边界；grep 只用 scope_files/scope_roots；codegraph 结果按 scope 过滤；禁止全仓 grep。
-4. 只输出 cmdId 分发的直接目标业务函数，不展开业务函数内部实现。
+4. 只输出直接目标业务函数（含 3.6 的 `*` 无条件/内联处理记录），不展开业务函数内部实现。
 5. 接口函数必须能在 scope 内定位到定义；范围外记 unresolved，不输出。
 6. 不臆造：无法解析的宏/目标写明尝试过的搜索方式。
 7. 输出路径一律绝对路径；函数名带作用域限定；重载用文件+行号区分。
@@ -1042,8 +1042,8 @@ codegraph 未安装/未配置 → 用常规工具代替，不中断分析。
 | `dispatch_not_found` | 找不到 Dispatch 函数 | 报告，结束 |
 | `state_conflict` | progress/entry_state/trace_state 的 project_dir/service_name 与当前调用不一致 | 报告，结束，不删除旧状态 |
 | `state_io_error` | 状态文件读写失败或 JSON 不可解析 | 报告，结束 |
-| `output_write_failed` | 最终 JSON 写入或 mv 失败 | 报告，保留 phase=output，便于重试 |
-| `self_check_failed` | 自检项失败 | 报告，结束，不写最终 JSON |
+| `output_write_failed` | 临时文件写入、回读校验、mv 或最终文件存在性确认失败 | 报告，保留 phase=output，便于重试 |
+| `self_check_failed` | 自检清单第 1-7 项失败 | 报告，`trace_state.status` 保持 `self_check`，`phase` 保持不变，结束，不写最终 JSON |
 
 ### 术语表
 
@@ -1053,12 +1053,12 @@ codegraph 未安装/未配置 → 用常规工具代替，不中断分析。
 | 服务入口变量 | `HdfDriverEntry` 类型的变量，如 `g_ArDriverEntry` |
 | Bind 函数 | 入口结构体 `.Bind` 字段指向的函数 |
 | Dispatch 函数 | Bind 阶段链接到 Host 的 `ioService.Dispatch`（或等价成员）的函数 |
-| 分发函数 | 根据 cmdId 选择处理路径的函数 |
+| 分发函数 | 根据 cmdId 选择处理路径的函数，包括 Dispatch、转发器、OnRemoteRequest、内层分发函数 |
 | cmdId 用例 | 分发结构中的一个具体 case 或条件分支 |
 | 外层 cmd | 调用链上最外层的具体 cmdId 用例的宏/表达式和值 |
 | 接口函数 | cmdId 用例分支中直接接收客户端 data（或 data 派生值）的业务函数 |
-| 工作项 | 追踪队列中的单元：`(分发函数, 当前 cmdId 变量, 外层 cmd, data 变量, 调用路径)` |
-| 中间结果 | `progress.json`、`tmp/entry_state.json`、`tmp/trace_state.json` 等状态文件 |
+| 工作项 | 追踪队列中的单元：`(分发函数, 当前 cmdId 变量, 外层 cmd, data 变量, data_derived, 调用路径)` |
+| 中间结果 | `progress.json`、`tmp/scope_files.txt`、`tmp/scope_roots.txt`、`tmp/entry_state.json`、`tmp/trace_state.json` 等中间文件 |
 | scope_files | 分析范围内展开后的精确文件清单 |
 | scope_roots | clean_code.txt 中原始的文件/文件夹条目清单 |
 
@@ -1092,8 +1092,8 @@ codegraph 未安装/未配置 → 用常规工具代替，不中断分析。
 3. 阶段二：定位 `HdfArDriverBind` 定义，识别 Host 类型与 `ioService.Dispatch = ArDriverDispatch`，提取 `IActivityInterface`、`ArService`、`ActivityInterfaceStub` 及其 `OnRemoteRequest`；写 `entry_state.bind`；`progress.phase = trace_dispatch`。
 4. 阶段三：以 `ArDriverDispatch` 初始化队列，追踪 `SendRequest` 到 `ActivityInterfaceStub::OnRemoteRequest`，枚举 8 个 cmdId 用例并解析宏值，把 `ActivityInterfaceStubGetVersion` 等直接目标写入 `handlers`；每处理完一个工作项原子保存 `trace_state.json`，队列为空后 `trace_state.status = self_check`。
 5. 自检：执行第八章自检清单；通过后 `trace_state.status = completed`，`progress.phase = output`。
-6. 输出：组装并写 `<out>/tmp/ar_service_api.json.tmp`，回读校验后 `mv` 为 `<out>/ar_service_api.json`；`progress.phase = done`。
-7. 完成报告：`127 files / 8 cases / 8 interfaces / 0 unresolved`，最终文件 `/srv/ohos/drivers/.ethunter_out/hal-service-api-finder/ar_service_api.json`。
+6. 输出：组装并写 `<out>/tmp/ar_service_api.json.tmp`，回读校验后 `mv` 为 `<out>/ar_service_api.json`；双方法确认最终文件存在后 `progress.phase = done`。
+7. 完成报告：`127 files / 8 cases / 8 interfaces / 0 unresolved`；service_name = `ar_service`，入口变量 = `g_ArDriverEntry`，Bind = `HdfArDriverBind`，Dispatch 数量 = 1；最终文件 `/srv/ohos/drivers/.ethunter_out/hal-service-api-finder/ar_service_api.json`。
 
 ### 示例二：断点续跑
 
@@ -1113,6 +1113,6 @@ codegraph 未安装/未配置 → 用常规工具代替，不中断分析。
 ```
 
 1. 初始化与 scope 生成正常，`tmp/scope_files.txt` 共 127 个文件。
-2. 阶段一在 scope 内搜索 `"ar_service_typo"`（`grep -I -H -n -F '"ar_service_typo"'`），0 命中。
+2. 阶段一在 scope 内搜索 `"ar_service_typo"`（`xargs -r -a "<out>/tmp/scope_files.txt" -d '\n' grep -I -H -n -F '"ar_service_typo"'`），0 命中。
 3. 按第四章写 `progress.error = {code: "service_not_found", message: ..., evidence: ...}`：`message` 记录 scope 文件数 127 与搜索模式 `"ar_service_typo"`，`evidence` 明确写“0 命中”；保持 `phase = locate_entry`，不写 `entry_state.json`，停止。
 4. 报告：`service_not_found`，分析范围 127 个文件，已搜索模式 `"ar_service_typo"`；建议检查 service_name 拼写（如 `ar_service`），并确认 `clean_code.txt` 覆盖了该驱动的定义文件。

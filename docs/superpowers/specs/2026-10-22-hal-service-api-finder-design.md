@@ -790,7 +790,8 @@ C++ 间接调用、虚函数、函数指针、重载等解析细节可参考 tai
 | `dispatch_not_found` | 找不到 Dispatch 函数 | 报告，结束 |
 | `state_conflict` | progress/entry_state/trace_state 的 project_dir/service_name 与当前调用不一致 | 报告，结束，不删除旧状态 |
 | `state_io_error` | 状态文件读写失败或 JSON 不可解析 | 报告，结束 |
-| `output_write_failed` | 最终 JSON 写入或 mv 失败 | 报告，保留 phase=output，便于重试 |
+| `output_write_failed` | 临时文件写入、回读校验、mv 或最终文件存在性确认失败 | 报告，保留 phase=output，便于重试 |
+| `self_check_failed` | 自检清单第 1-7 项失败 | 报告，`trace_state.status` 保持 `self_check`，`phase` 保持不变，结束，不写最终 JSON |
 
 ### 11.2 分支级问题（不终止整体分析）
 
@@ -840,7 +841,7 @@ C++ 间接调用、虚函数、函数指针、重载等解析细节可参考 tai
 
 | 工具 | 用途 |
 |------|------|
-| `Bash` | find/grep/xargs/ls/mkdir/mv，scope 内搜索与状态落盘 |
+| `Bash` | find/grep/xargs/ls/mkdir/mv/rm，scope 内搜索与状态落盘 |
 | `Read` | 读取源码、macro.json、状态文件 |
 | `Write` | 写入 progress.json、entry_state.json、trace_state.json、最终 JSON |
 | `mcp__codegraph__codegraph_explore` | （可选）.codegraph 存在时优先的代码探索工具 |
@@ -853,7 +854,7 @@ codegraph 未安装/未配置 → 用常规工具代替，不中断分析。
 1. 全部由主 agent 完成，不调用 sub-agent。
 2. 质量优先；不设深度/扇出上限；所有分支追到接口函数或明确终止条件。
 3. clean_code.txt 是硬边界；grep 只用 scope_files/scope_roots；codegraph 结果按 scope 过滤；禁止全仓 grep。
-4. 只输出 cmdId 分发的直接目标业务函数，不展开业务函数内部实现。
+4. 只输出直接目标业务函数（含 3.6 的 `*` 无条件/内联处理记录），不展开业务函数内部实现。
 5. 接口函数必须能在 scope 内定位到定义；范围外记 unresolved，不输出。
 6. 不臆造：无法解析的宏/目标写明尝试过的搜索方式。
 7. 输出路径一律绝对路径；函数名带作用域限定；重载用文件+行号区分。
