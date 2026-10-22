@@ -451,7 +451,7 @@ Include this exact JSON block under a `### entry_state.json` heading:
       "interface_type": "IActivityInterface",
       "impl_class": "ArService",
       "impl_file": "/abs/path/...",
-      "stub_class": "IActivityInterfaceStub",
+      "stub_class": "ActivityInterfaceStub",
       "on_remote_request": {
         "name": "OHOS::HDI::ActivityRecognition::V1_0::ActivityInterfaceStub::OnRemoteRequest",
         "file": "/abs/path/...",
@@ -715,14 +715,14 @@ git commit -m "docs(hal-service-api-finder): add registration-point phase"
 
 Include these subsections:
 
-1. **定位 Bind 定义** — search scope; prefer same file as entry; resolve macro/wrapper `.Bind` values to the real function; verify a full body; handle multiple definitions:
+1. **定位 Bind 定义** — search scope; prefer same file as entry; require exact identifier equality; dedupe candidates by `(file, signature line)`; resolve macro/wrapper `.Bind` values to the real function with a visited set and cycle detection; if a qualified `Class::Method` is not found, search the class body for the unqualified method; verify a full body; handle multiple definitions:
    - signature matching `int32_t (*)(struct HdfDeviceObject *)` first;
    - still ambiguous → `bind_ambiguous`, list candidates, exit;
    - no body → `bind_definition_not_found`, exit.
-2. **提取 Host 与 Dispatch** — identify `new <HostType>`, pointer/stack/static instances; accept `host->ioService.Dispatch = X`, `host->ioService = { .Dispatch = X }`, `host.ioService.Dispatch = X`, `host->Dispatch = X`; if absent, follow initialization functions and search scope for Dispatch assignments; keep all Dispatch functions; a Dispatch whose definition is outside scope gets `file`/`line = null` and is recorded as `unresolved` by phase 3 instead of generating a work item; none → `dispatch_not_found`, exit.
-3. **提取 stub、接口与实现类（可选）** — find stub-like member assignment; trace `GetOrNewObject(serviceImpl, IActivityInterface::GetDescriptor())` or `new XxxStub`; record stub member, interface type, impl class, stub class; locate `OnRemoteRequest`; missing is not fatal.
-4. **服务注册证据** — find `deviceObject->service = &host->ioService` or equivalent; record evidence only.
-5. **阶段产物** — write `bind` to `tmp/entry_state.json`; proceed to `trace_dispatch`.
+2. **提取 Host 与 Dispatch** — identify `new <HostType>`, pointer/stack/static, `sptr`/`std::unique_ptr`/`std::make_unique`/factory instances; accept `host->ioService.Dispatch = X`, `host->ioService = { .Dispatch = X }`, `host.ioService.Dispatch = X`, `host->Dispatch = X`; if absent, follow initialization functions with a visited set and search scope for Dispatch assignments; keep all Dispatch functions; a Dispatch whose definition is outside scope gets `file`/`line = null` and is recorded as `unresolved` by phase 3 instead of generating a work item; if all Dispatch entries are skipped and `stub.on_remote_request` is non-null, phase 3 seeds from that OnRemoteRequest; none → `dispatch_not_found`, exit.
+3. **提取 stub、接口与实现类（可选）** — find stub-like member assignment; trace `GetOrNewObject(serviceImpl, IActivityInterface::GetDescriptor())` or `new XxxStub`; record stub member, interface type, impl class (class body required), stub class; search both `<interface_type>Stub` and the leading-`I`-stripped name; locate `OnRemoteRequest` with exact-stub-first/nearest-base precedence; missing is not fatal.
+4. **服务注册证据** — find `deviceObject->service = &host->ioService` or equivalent; record evidence only; missing fields may be null.
+5. **阶段产物** — set `bind.status = in_progress` at phase start; write `bind` to `tmp/entry_state.json`; proceed to `trace_dispatch`.
 
 Include the sample snippets from rr1:
 
@@ -774,7 +774,7 @@ git commit -m "docs(hal-service-api-finder): add Bind analysis phase"
 
 Include:
 
-- Initial work item for each Dispatch function, with `current_cmd_expr`, `current_cmd_value = null`, `outer_cmd_expr/value = null`, `data_vars`, `parent_case_id = null`, `path`, `status = pending`.
+- Initial work item for each Dispatch function with a non-null definition file, with `current_cmd_expr`, `current_cmd_value = null`, `outer_cmd_expr/value = null`, `data_vars`, `parent_case_id = null`, `path`, `status = pending`. Skip `dispatch_functions` entries with `file == null` and record them in `trace_state.unresolved` (`kind = "definition"`); if all entries are skipped and `bind.stub.on_remote_request` is non-null, seed a work item from that OnRemoteRequest.
 - If Dispatch directly calls `stub->SendRequest(cmdId, ...)`, enqueue the corresponding stub's `OnRemoteRequest`, with outer still null.
 - Recognize: switch/case, range/mask/if-else, array/map/function-pointer tables, table registration, macro-generated dispatch, `SendRequest`/`OnRemoteRequest` forwarding, unconditional direct data handling.
 

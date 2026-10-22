@@ -270,12 +270,14 @@ HDF_INIT(g_ArDriverEntry);
 ### 7.1 定位 Bind 定义
 
 1. 在 scope 内搜索 Bind 函数定义；优先选择与入口结构体同一文件的定义。
-2. 若 `.Bind` 的值是宏或包装名，先在 scope 内解析到实际函数名，再定位定义。
-3. 校验存在完整函数体（不是仅声明）。
-3. 多个同名定义时：
+2. 读到的定义函数名必须与解析后的 Bind 名完全一致（C++ 限定名按限定名匹配）；候选按 `(file, 签名行)` 去重。
+3. 若 `.Bind` 的值是宏或包装名，先在 scope 内解析到实际函数名，再定位定义；包装/初始化调用链维护 visited 集合，重复出现即停止并记录环。
+4. 若 `.Bind` 是 `Class::Method` 且限定名搜索无定义，定位该类定义，在类体内搜索未限定方法名。
+5. 校验存在完整函数体（不是仅声明）。
+6. 多个同名定义时：
    - 签名匹配 `int32_t (*)(struct HdfDeviceObject *)` 的定义优先；
    - 仍不唯一 → 报错 `bind_ambiguous`，列出候选并结束。
-4. 完全找不到函数体 → 报错 `bind_definition_not_found`，说明原因并结束。
+7. 完全找不到函数体 → 报错 `bind_definition_not_found`，说明原因并结束。
 
 ### 7.2 提取 Host 与 Dispatch
 
@@ -284,7 +286,8 @@ HDF_INIT(g_ArDriverEntry);
 1. Host 结构体类型与实例：
    - `new <HostType>`；
    - `<HostType> *host = ...`；
-   - 栈/静态实例。
+   - 栈/静态实例；
+   - `sptr` / `std::unique_ptr` / `std::make_unique` / 工厂函数返回的实例。
    - 找不到 Host 类型时记录为 `null`，继续查找 Dispatch 赋值。
 
 2. Dispatch 赋值，接受以下形式：
@@ -301,7 +304,8 @@ host->Dispatch = X;              // Host 直接内嵌 IDeviceIoService 时
    - 在 scope 内搜索该 Host 类型的 Dispatch 赋值；
    - 在 scope 内搜索 `IDeviceIoService` 相关的 Dispatch 赋值。
 4. 多个 Dispatch 函数全部保留，按函数定义去重，后续逐一追踪。
-5. 仍找不到 → 报错 `dispatch_not_found`，说明原因并结束。
+5. Dispatch 定义不在 scope 内时，`file`/`line` 记 `null`，`via` 记赋值文件:行号与左侧表达式；阶段三跳过该条目并记入 `trace_state.unresolved`。若所有 Dispatch 条目都被跳过且 `stub.on_remote_request` 非 `null`，阶段三直接用该 `OnRemoteRequest` 初始化工作项。
+6. 仍找不到 → 报错 `dispatch_not_found`，说明原因并结束。
 
 ### 7.3 提取 stub、接口与实现类（可选项）
 
@@ -313,17 +317,17 @@ host->Dispatch = X;              // Host 直接内嵌 IDeviceIoService 时
 3. 记录：
    - stub 成员名；
    - 接口类型（如 `IActivityInterface`）；
-   - 实现类（如 `ArService`）及创建位置；
-   - stub 类（如 `IActivityInterfaceStub`）。
+   - 实现类（如 `ArService`）及创建位置（必须有类体，不能只是前置声明）；
+   - stub 类（如 `ActivityInterfaceStub`）。搜索 `<interface_type>Stub` 以及去掉接口名前导 `I` 后的 `<StubName>`，用 `OnRemoteRequest` 交叉确认。
 4. 定位 `OnRemoteRequest`：
    - 由接口类型推导 stub 类，搜索 `<StubClass>::OnRemoteRequest` 定义；
    - 或搜索实现类/接口相关类中的 `OnRemoteRequest`；
-   - 多个候选全部记录，后续追踪时逐一解析；找不到则留空，不中断。
+   - 多个候选时优先精确 stub 类，其次最近的基类；其余候选写入 evidence；找不到则留空，不中断。
 5. 这些信息是可选项，缺失不构成阶段失败。
 
 ### 7.4 服务注册证据
 
-查找 `deviceObject->service = &host->ioService` 或等价赋值，记录文件、行号、证据。仅作为诊断信息，不作为硬性失败条件。
+查找 `deviceObject->service = &host->ioService` 或等价赋值，记录文件、行号、证据。仅作为诊断信息，不作为硬性失败条件；缺失时 `file`/`line`/`evidence` 记 `null`。
 
 ### 7.5 阶段产物
 
@@ -610,7 +614,7 @@ C++ 间接调用、虚函数、函数指针、重载等解析细节可参考 tai
       "interface_type": "IActivityInterface",
       "impl_class": "ArService",
       "impl_file": "/abs/path/...",
-      "stub_class": "IActivityInterfaceStub",
+      "stub_class": "ActivityInterfaceStub",
       "on_remote_request": {
         "name": "OHOS::HDI::ActivityRecognition::V1_0::ActivityInterfaceStub::OnRemoteRequest",
         "file": "/abs/path/...",
