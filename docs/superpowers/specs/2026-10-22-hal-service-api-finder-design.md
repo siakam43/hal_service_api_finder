@@ -4,6 +4,8 @@
 - 状态：设计已确认，待实现
 - 交付物：`hal-service-api-finder/SKILL.md`（纯 markdown，无脚本，无 sub-agent）
 
+> 注：搜索命令已统一到 SKILL.md 第三章「搜索方法与纪律」，本文中的完整命令仅作历史记录。
+
 ## 1. 背景与目标
 
 开发一个纯 markdown 的 skill，名为 `hal-service-api-finder`。该 skill 根据 OpenHarmony/HDF HAL 层 service 的注册流程，识别指定 service 对外提供的全部接口函数。

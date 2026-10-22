@@ -10,6 +10,8 @@
 
 ---
 
+> 注：搜索命令已统一到 SKILL.md 第三章「搜索方法与纪律」，本文中的完整命令仅作历史记录。
+
 ## Testing Strategy
 
 The deliverable is a prompt document, not executable code. Each task ends with executable static checks:
