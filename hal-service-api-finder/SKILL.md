@@ -906,9 +906,9 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 
 | 工具 | 用途 |
 |------|------|
-| `Bash` | find/grep/xargs/ls/mkdir/mv/rm，scope 内搜索与状态落盘 |
-| `Read` | 读取源码、macro.json、状态文件 |
-| `Write` | 写入 progress.json、entry_state.json、trace_state.json、最终 JSON |
+| `Bash` | find/grep/xargs/ls/mkdir/mv/rm，scope 内搜索、备份/清理输出目录 |
+| `Read` | 读取源码、macro.json、阶段快照 |
+| `Write` | 写入 01_entry.json、02_bind.json、03_trace.json、error.json、最终 JSON |
 | `mcp__codegraph__codegraph_explore` | （可选）.codegraph 存在时优先的代码探索工具 |
 | `mcp__plugin_oh-my-claudecode_t__ast_grep_search` | （可选）AST 模式搜索 |
 
@@ -923,7 +923,7 @@ codegraph 未安装/未配置 → 用常规工具代替，不中断分析。
 5. 接口函数必须能在 scope 内定位到定义；范围外记 unresolved，不输出。
 6. 不臆造：无法解析的宏/目标写明尝试过的搜索方式。
 7. 输出路径一律绝对路径；函数名带作用域限定；重载用文件+行号区分。
-8. 每个工作项处理完立即落盘；最终 JSON 最后一次性原子写出。
+8. 每个阶段结束写一次快照；最终 JSON 最后一次性原子写出。
 9. 关键文件存在性双方法确认，禁止 `test -f`。
 10. 全中文提示词，同一概念用词前后一致。
 
@@ -933,7 +933,7 @@ codegraph 未安装/未配置 → 用常规工具代替，不中断分析。
 |--------|----------|------|
 | `usage_error` | 参数缺失、过多、为空，或 service_name 含非法字符 | 打印用法，结束 |
 | `invalid_project_dir` | project_dir 不存在或不是目录 | 报告，结束 |
-| `output_dir_failed` | 输出目录创建失败 | 报告，结束 |
+| `output_dir_failed` | 备份旧输出目录或创建新输出目录失败 | 报告，结束 |
 | `empty_scope` | 分析范围为空 | 报告，结束 |
 | `service_not_found` | 找不到 moduleName 精确匹配的 HdfDriverEntry | 报告范围文件数、搜索模式，结束 |
 | `multiple_matches` | 多个候选无法唯一确定 | 列出候选（变量、文件、行号），结束 |
@@ -941,10 +941,10 @@ codegraph 未安装/未配置 → 用常规工具代替，不中断分析。
 | `bind_definition_not_found` | Bind 函数体不在 scope 内 | 报告，结束 |
 | `bind_ambiguous` | 多个同名 Bind 定义无法区分 | 列出候选，结束 |
 | `dispatch_not_found` | 找不到 Dispatch 函数 | 报告，结束 |
-| `state_conflict` | progress.json 的 project_dir/service_name 或其他状态文件的 service_name 与当前调用不一致 | 报告，结束，不删除旧状态 |
-| `state_io_error` | 状态文件读写失败或 JSON 不可解析 | 报告，结束 |
-| `output_write_failed` | 临时文件写入、回读校验、mv 或最终文件存在性确认失败 | 报告，保留 phase=output，便于重试 |
-| `self_check_failed` | 自检清单第 1-7 项失败 | 报告，`trace_state.status` 保持 `self_check`，`phase` 保持不变，结束，不写最终 JSON |
+| `snapshot_write_failed` | 01_entry.json / 02_bind.json / 03_trace.json 写入失败 | 报告，结束 |
+| `output_write_failed` | 最终 JSON 写入、回读或 mv 失败 | 报告，结束 |
+| `self_check_failed` | 自检清单失败 | 报告，结束，不写最终 JSON |
+| `internal_error` | 工具/文件 I/O 或无法继续读取源码等不可恢复错误 | 报告，结束 |
 
 ### 术语表
 
@@ -959,7 +959,7 @@ codegraph 未安装/未配置 → 用常规工具代替，不中断分析。
 | 外层 cmd | 调用链上最外层的具体 cmdId 用例的宏/表达式和值 |
 | 接口函数 | cmdId 用例分支中直接接收客户端 data（或 data 派生值）的业务函数 |
 | 工作项 | 追踪队列中的单元：`(分发函数, 当前 cmdId 变量, 外层 cmd, data 变量, data_derived, 调用路径)` |
-| 中间结果 | `progress.json`、`tmp/scope_files.txt`、`tmp/scope_roots.txt`、`tmp/entry_state.json`、`tmp/trace_state.json` 等中间文件 |
+| 中间结果 | `scope_files.txt`、`scope_roots.txt`、`01_entry.json`、`02_bind.json`、`03_trace.json`、`error.json` 等调试文件 |
 | scope_files | 分析范围内展开后的精确文件清单 |
 | scope_roots | clean_code.txt 中原始的文件/文件夹条目清单 |
 
@@ -974,8 +974,8 @@ codegraph 未安装/未配置 → 用常规工具代替，不中断分析。
 | “这个函数像 helper，跳过” | 读函数体确认，不能凭名字判断。 |
 | “范围外可能有定义，去全仓 grep 一下” | 禁止；scope 是硬边界。 |
 | “短函数名就够了” | 必须带作用域限定名。 |
-| “状态最后一起存” | 每个工作项处理完立即落盘。 |
-| “有中间结果也从头跑一遍” | 先走恢复检查，按 phase 续跑。 |
+| “阶段结果最后一起写” | 每个阶段结束写一次快照；最终 JSON 最后写出。 |
+| “想复用上次结果” | 每次执行先备份旧输出目录，再从零分析，不复用历史结果。 |
 | “用 sub-agent 并行快一点” | 禁止；全部由主 agent 完成。 |
 | “只收 reply 也算接口” | 纯 reply、不读 data 的函数不算。 |
 | “业务函数内部还有处理，继续展开” | 只记直接目标，不展开业务实现。 |
@@ -988,24 +988,23 @@ codegraph 未安装/未配置 → 用常规工具代替，不中断分析。
 /hal-service-api-finder /srv/ohos/drivers demo_service
 ```
 
-1. 初始化：校验参数；创建 `/srv/ohos/drivers/.ethunter_out/hal-service-api-finder/tmp`；确定分析范围并生成 `tmp/scope_files.txt`（存在 `clean_code.txt` 时另生成 `tmp/scope_roots.txt`）；写入初始 `progress.json`（`phase = locate_entry`，`locate_entry.status = in_progress`，其余阶段 `pending`，`error = null`）。
-2. 阶段一：在 scope 内搜索 `"demo_service"`，定位 `struct HdfDriverEntry g_DemoDriverEntry = {...}` 与 `HDF_INIT(g_DemoDriverEntry)`；写 `entry_state.json`（`entry.variable = g_DemoDriverEntry`，`entry.bind = HdfDemoDriverBind`）；`progress.phase = analyze_bind`。
-3. 阶段二：定位 `HdfDemoDriverBind` 定义，识别 Host 类型与 `ioService.Dispatch = DemoDriverDispatch`，提取 `IDemoInterface`、`DemoService`、`DemoInterfaceStub` 及其 `OnRemoteRequest`；写 `entry_state.bind`；`progress.phase = trace_dispatch`。
-4. 阶段三：以 `DemoDriverDispatch` 初始化队列，追踪 `SendRequest` 到 `DemoInterfaceStub::OnRemoteRequest`，枚举 8 个 cmdId 用例并解析宏值，把 `DemoInterfaceStubGetVersion` 等直接目标写入 `handlers`；每处理完一个工作项原子保存 `trace_state.json`，队列为空后 `trace_state.status = self_check`。
-5. 自检：执行第八章自检清单；通过后 `trace_state.status = completed`，`progress.phase = output`。
-6. 输出：组装并写 `<out>/tmp/demo_service_api.json.tmp`，回读校验后 `mv` 为 `<out>/demo_service_api.json`；双方法确认最终文件存在后 `progress.phase = done`。
-7. 完成报告：`127 files / 8 cases / 8 interfaces / 0 unresolved`；service_name = `demo_service`，入口变量 = `g_DemoDriverEntry`，Bind = `HdfDemoDriverBind`，Dispatch 数量 = 1；最终文件 `/srv/ohos/drivers/.ethunter_out/hal-service-api-finder/demo_service_api.json`。
+1. 初始化：校验参数；若 `/srv/ohos/drivers/.ethunter_out/hal-service-api-finder` 已存在，先备份为 `..._bak`，再新建空目录；确定分析范围并生成 `scope_files.txt`（存在 `clean_code.txt` 时另生成 `scope_roots.txt`）。
+2. 阶段一：在 scope 内搜索 `"demo_service"`，定位 `struct HdfDriverEntry g_DemoDriverEntry = {...}` 与 `HDF_INIT(g_DemoDriverEntry)`；写 `<out>/01_entry.json`。
+3. 阶段二：定位 `HdfDemoDriverBind` 定义，识别 Host 类型与 `ioService.Dispatch = DemoDriverDispatch`，提取 `IDemoInterface`、`DemoService`、`DemoInterfaceStub` 及其 `OnRemoteRequest`；写 `<out>/02_bind.json`。
+4. 阶段三：以 `DemoDriverDispatch` 初始化内存队列，追踪 `SendRequest` 到 `DemoInterfaceStub::OnRemoteRequest`，枚举 8 个 cmdId 用例并解析宏值；队列为空后写 `<out>/03_trace.json`。
+5. 输出：自检后组装最终数组，写 `<out>/demo_service_api.json.tmp`，回读校验后 `mv` 为 `<out>/demo_service_api.json`，双方法确认存在。
+6. 完成报告：`127 files / 8 cases / 8 interfaces / 0 unresolved`；service_name = `demo_service`，入口变量 = `g_DemoDriverEntry`，Bind = `HdfDemoDriverBind`，Dispatch 数量 = 1；最终文件 `/srv/ohos/drivers/.ethunter_out/hal-service-api-finder/demo_service_api.json`。
 
-### 示例二：断点续跑
+### 示例二：重复执行（备份旧结果）
 
 ```text
 /hal-service-api-finder /srv/ohos/drivers demo_service
 ```
 
-1. 双方法检查到已有 `progress.json`，`project_dir` / `service_name` 与本次调用一致，`phase = trace_dispatch`；按恢复流程继续，不重新生成 scope。
-2. 校验 `trace_state.json` 有效：`service_name` 一致，`status = in_progress`，`queue` 中有一个 `status = in_progress` 的工作项（如 `dispatcher = OHOS::HDI::Demo::V1_0::DemoInterfaceStub::OnRemoteRequest`）。
-3. 将该工作项置回 `pending`，重新读取 dispatcher 完整函数体并重做其全部分支；已 `analyzed` 的 case 按去重键合并 handlers，不重复输出。
-4. 继续处理其余队列项；队列为空后 `trace_state.status = self_check`，完成自检并置 `progress.phase = output`，组装输出、确认最终文件后置 `progress.phase = done`，报告最终结果。
+1. 检测到 `<out>` 已存在；若 `<out>_bak` 也存在，先删除旧 `_bak`。
+2. 将 `<out>` 整体 `mv` 为 `<out>_bak`，新建空的 `<out>`。
+3. 重新生成 scope 文件，按阶段一、二、三从零分析；不读取 `_bak` 中的任何内容。
+4. 本次结果写入新的 `<out>`；旧结果保留在 `<out>_bak` 供人工查看。
 
 ### 示例三：service 未找到
 
@@ -1013,7 +1012,7 @@ codegraph 未安装/未配置 → 用常规工具代替，不中断分析。
 /hal-service-api-finder /srv/ohos/drivers demo_service_typo
 ```
 
-1. 初始化与 scope 生成正常，`tmp/scope_files.txt` 共 127 个文件。
+1. 初始化与 scope 生成正常，`scope_files.txt` 共 127 个文件。
 2. 阶段一按「精确字符串搜索」查找 `"demo_service_typo"`，0 命中。
-3. 按第四章写 `progress.error = {code: "service_not_found", message: ..., evidence: ...}`：`message` 记录 scope 文件数 127 与搜索模式 `"demo_service_typo"`，`evidence` 明确写“0 命中”；保持 `phase = locate_entry`，不写 `entry_state.json`，停止。
+3. 写 `<out>/error.json = {phase: "locate_entry", code: "service_not_found", message: ..., evidence: ...}`：`message` 记录 scope 文件数 127 与搜索模式 `"demo_service_typo"`，`evidence` 明确写“0 命中”；停止，不写 `01_entry.json`，不进入阶段二。
 4. 报告：`service_not_found`，分析范围 127 个文件，已搜索模式 `"demo_service_typo"`；建议检查 service_name 拼写（如 `demo_service`），并确认 `clean_code.txt` 覆盖了该驱动的定义文件。
