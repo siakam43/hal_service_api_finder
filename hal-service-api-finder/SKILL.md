@@ -402,9 +402,9 @@ HDF_INIT(g_DemoDriverEntry);
 
 1. 组装 `01_entry.json`：
    - `service_name`：当前 `<service_name>`；
-   - `scope`：`file_count`、`clean_code`、`scope_files`、`scope_roots`；
+   - `scope`：`file_count` 为 `<out>/scope_files.txt` 的行数；`clean_code` 为本次是否使用 clean_code.txt（布尔值）；`scope_files` 固定为 `"scope_files.txt"`；`scope_roots` 在使用 clean_code.txt 时为 `"scope_roots.txt"`，否则为 `null`；
    - `entry`：本阶段提取的 `variable`、`file`、`line`、`module_name`、`bind`、`init`、`release`、`registration`。
-2. 直接写 `<out>/01_entry.json`；写入失败 → 写 `error.json`（`phase = "locate_entry"`，`code = "snapshot_write_failed"`），停止。
+2. 直接写 `<out>/01_entry.json`；写入失败 → 删除可能残留的 `<out>/01_entry.json`，再写 `error.json`（`phase = "locate_entry"`，`code = "snapshot_write_failed"`），停止。
 3. 进入 `## 六、阶段二：分析 Bind`。
 
 ## 六、阶段二：分析 Bind
