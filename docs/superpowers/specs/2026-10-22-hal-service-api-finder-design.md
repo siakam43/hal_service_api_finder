@@ -217,7 +217,7 @@ struct HdfDriverEntry g_ArDriverEntry = {
 3. 只接受 `.moduleName` 字段与 service_name 完全相等（区分大小写）的初始化。
 4. 提取：
    - 入口变量名（如 `g_ArDriverEntry`）；
-   - 定义文件绝对路径、行号；
+   - 定义文件绝对路径、初始化器声明起始行号；
    - `.moduleName`、`.Bind`、`.Init`、`.Release` 的值；
    - 结构体中其他与注册相关的字段（仅记录）。
 
@@ -232,15 +232,18 @@ HDF_INIT(g_ArDriverEntry);
 ```
 
 - 在 scope 内搜索 `HDF_INIT(<入口变量>)`（允许空白差异，也检查 `HDF_INIT(&<入口变量>)`）。
+- `HDF_INIT` 必须是有效可执行语句，不能位于注释、字符串或日志中。
 - 找到 → `registration.form = "HDF_INIT"`，记录文件、行号、证据。
 
 找不到时：
 
 1. 在 scope 内搜索入口变量的所有引用（word boundary）。
 2. 排除定义/初始化本身。
-3. 逐个阅读引用上下文，判断是否为其他注册形式（注册函数调用、注册宏、放入驱动表等）。
+3. 逐个阅读引用上下文，判断是否为其他注册形式（注册函数调用、注册宏、放入驱动表等）；必须是有效可执行语句，不能是注释或日志。
 4. 找到 → `registration.form = "other"`，记录文件、行号、证据。
 5. 仍找不到 → `registration.form = "unverified"`，记录“moduleName 已精确命中入口结构体，但未发现注册引用”。
+
+同一候选有多处有效注册证据时，记录全部位置；`registration.file` / `registration.line` 取 `scope_files.txt` 顺序中的第一处，`evidence` 列出全部位置。条件编译分支按 5.3 处理。
 
 **只要 moduleName 精确命中的 HdfDriverEntry 存在，就视为找到服务；注册引用只作为证据，不作为硬性失败条件。**
 
@@ -546,6 +549,7 @@ C++ 间接调用、虚函数、函数指针、重载等解析细节可参考 tai
 - `phase` 取值：`locate_entry` / `analyze_bind` / `trace_dispatch` / `output` / `done`。
 - 阶段状态：`pending` / `in_progress` / `completed`。
 - 每次阶段切换立即保存。
+- 全新分析开始时，先创建初始 progress.json：写入 service_name/project_dir/scope，phase = locate_entry，locate_entry.status = in_progress，其余阶段 status = pending，error = null；写入方式为 .tmp + mv。
 - 失败时不新增 `failed` 阶段：保留当前 `phase`，写入：
 
 ```json

@@ -397,6 +397,7 @@ Add these rules:
 - `phase` 取值：`locate_entry` / `analyze_bind` / `trace_dispatch` / `output` / `done`。
 - 阶段状态：`pending` / `in_progress` / `completed`。
 - 每次阶段切换立即保存。
+- 全新分析开始时，先创建初始 progress.json：写入 service_name/project_dir/scope，phase = locate_entry，locate_entry.status = in_progress，其余阶段 status = pending，error = null；写入方式为 .tmp + mv。
 - 失败时不新增 failed 阶段；保留当前 phase，写入 `error: {code, message, evidence}`，下次运行从当前阶段重试。
 - 重试前清空 error。
 - phase 是恢复的唯一权威；各阶段 `status` 仅作诊断，必须与 `phase` 同步更新。
@@ -659,11 +660,11 @@ git commit -m "docs(hal-service-api-finder): add state files and resume flow"
 
 Include these subsections:
 
-1. **精确搜索** — search `"<service_name>"` with `grep -F` in scope_files; read at least 30 lines of context; accept only `.moduleName` in a `HdfDriverEntry` initializer; extract variable, file, line, Bind/Init/Release.
-2. **注册形式确认** — prefer `HDF_INIT(<entry_var>)`; also check `HDF_INIT(&<entry_var>)`; fallback to other references; record `registration.form` as `HDF_INIT`, `other`, or `unverified`.
+1. **精确搜索** — search `"<service_name>"` with `grep -F` in scope_files; read at least 30 lines of context; accept only `.moduleName` in a `HdfDriverEntry` initializer; extract variable, file, initializer declaration line, Bind/Init/Release.
+2. **注册形式确认** — prefer `HDF_INIT(<entry_var>)`; also check `HDF_INIT(&<entry_var>)`; `HDF_INIT` must be a live executable statement, not a comment/string/log; fallback to other live references; record `registration.form` as `HDF_INIT`, `other`, or `unverified`; multiple evidence locations use the first in scope_files order.
 3. **服务存在判定** — a moduleName-matched `HdfDriverEntry` means the service is found; registration reference is evidence, not a hard gate.
-4. **多命中处理** — exact rules from the spec: unique candidate → use it; multiple candidates with exactly one registered → use it; multiple registered or none registered → `multiple_matches`, list candidates, exit.
-5. **失败处理** — `service_not_found` with scope file count and searched patterns; `bind_not_found` when `.Bind` is missing/empty/NULL.
+4. **多命中处理** — dedupe by `(file, initializer declaration line)`; unique candidate → use it; multiple candidates with exactly one registered → use it; multiple registered or none registered → `multiple_matches`, list candidates, exit.
+5. **失败处理** — `service_not_found` with scope file count, searched patterns, and a spelling/clean_code suggestion; `bind_not_found` when `.Bind` is missing/empty/NULL.
 6. **阶段产物** — write `entry` and `scope` to `tmp/entry_state.json`; proceed to `analyze_bind`.
 
 Include the sample code block from rr1:

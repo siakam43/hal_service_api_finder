@@ -190,6 +190,7 @@ xargs -r -a "<out>/tmp/scope_roots.txt" -d '\n' grep -I -rn -F "<pattern>"
 - `phase` 取值：`locate_entry` / `analyze_bind` / `trace_dispatch` / `output` / `done`。
 - 阶段状态：`pending` / `in_progress` / `completed`。
 - 每次阶段切换立即保存。
+- 全新分析开始时，先创建初始 progress.json：写入 service_name/project_dir/scope，phase = locate_entry，locate_entry.status = in_progress，其余阶段 status = pending，error = null；写入方式为 .tmp + mv。
 - 失败时不新增 failed 阶段；保留当前 phase，写入 `error: {code, message, evidence}`，下次运行从当前阶段重试。
 - 重试前清空 error。
 - phase 是恢复的唯一权威；各阶段 `status` 仅作诊断，必须与 `phase` 同步更新。
@@ -400,7 +401,7 @@ xargs -r -a "<out>/tmp/scope_files.txt" -d '\n' grep -I -H -n -F '"<service_name
 ```
 
 - 只允许搜索 `scope_files.txt` 中的文件；禁止 `grep -rn <project_dir>` 或任何等价的全仓搜索。`scope_roots.txt` 非 null 时可改用第三章“方式二”，但最终仍以 `scope_files.txt` 为硬边界。
-- 每个命中都必须用 Read 读取至少 30 行上下文（`offset=max(1, 命中行-15)`，`limit` 不少于 31）；若初始化器超出该范围，继续读到闭合 `};`。不得只凭 grep 行下结论。
+- 每个命中都必须用 Read 读取至少 30 行上下文（`offset=max(1, 命中行-15)`，`limit` 不少于 31）；向上读到初始化器声明行，向下读到闭合 `};`。不得只凭 grep 行下结论。
 - 一个命中只有同时满足以下条件才成为候选：
   1. 命中行是 `.moduleName` 成员初始化（允许 `.moduleName=...` 等空白差异），引号内字符串与 `<service_name>` 完全相等（区分大小写，`grep -F` 已按字面量匹配）；
   2. 向上可确认该成员位于 `HdfDriverEntry` 类型的初始化器内（声明形如 `struct HdfDriverEntry <var> = {` 或 `HdfDriverEntry <var> = {`，可带 `static`、`const` 等限定符），且 `.moduleName` 处于该初始化器的成员层级；
@@ -409,7 +410,7 @@ xargs -r -a "<out>/tmp/scope_files.txt" -d '\n' grep -I -H -n -F '"<service_name
 - 每个合法初始化器形成一个候选，提取并记录：
   - `variable`：初始化器变量名；
   - `file`：`scope_files.txt` 中登记的绝对路径；
-  - `line`：`.moduleName` 所在行号；
+  - `line`：初始化器声明起始行号（`struct HdfDriverEntry <var> = {` 或 `HdfDriverEntry <var> = {` 所在行）；
   - `module_name`：`<service_name>`；
   - `bind` / `init` / `release`：对应成员的赋值表达式原文；成员缺失或值为 `NULL` / `nullptr` / 空时记 `null`。
 
@@ -434,16 +435,18 @@ HDF_INIT(g_ArDriverEntry);
 对每个候选的 `variable`，按第三章“方式一”在 scope 内搜索其变量名（用 `-w` 避免子串误命中）：
 
 ```bash
-xargs -r -a "<out>/tmp/scope_files.txt" -d '\n' grep -I -H -n -F -w "<entry_var>"
+xargs -r -a "<out>/tmp/scope_files.txt" -d '\n' grep -I -H -n -E -w "<entry_var>"
 ```
 
 对每个引用读取足够上下文（至少覆盖其所在语句或初始化器），按以下优先级判定，命中即停：
 
-1. `HDF_INIT`：找到 `HDF_INIT(<entry_var>)` 或 `HDF_INIT(&<entry_var>)`。确认括号匹配、变量一致，记录该行文件、行号，`evidence` 为语句原文。
-2. `other`：没有 `HDF_INIT`，但找到其他语义明确的注册证据（如注册表/注册数组中的条目、注册函数调用）。记录文件、行号与 `evidence`。
+1. `HDF_INIT`：找到 `HDF_INIT(<entry_var>)` 或 `HDF_INIT(&<entry_var>)`。必须是有效可执行语句，不能位于注释、字符串或日志中；确认括号匹配、变量一致，记录该行文件、行号，`evidence` 为语句原文。
+2. `other`：没有 `HDF_INIT`，但找到其他语义明确的注册证据，例如注册函数调用（`RegisterXxx(<entry_var>)`）、驱动表/数组条目（`{ .moduleName = ..., .driver = <entry_var> }`）、注册宏。必须是有效可执行语句，不能是注释或日志。
 3. `unverified`：以上都没有。`file`、`line`、`evidence` 均记 `null`。
 
 - 变量声明、`extern`、普通读取/赋值、注释或日志提及都不是注册证据，不得记为 `other`。
+- 同一候选有多处有效注册证据时，记录全部位置；`registration.file` / `registration.line` 取 `scope_files.txt` 顺序中的第一处，`evidence` 列出全部位置。
+- 条件编译分支按第三章 macro.json 规则处理。
 - 记录 `entry.registration = {form, file, line, evidence}`；`form` 只能是 `HDF_INIT` / `other` / `unverified`。
 
 ### 服务存在判定
@@ -454,7 +457,7 @@ xargs -r -a "<out>/tmp/scope_files.txt" -d '\n' grep -I -H -n -F -w "<entry_var>
 
 ### 多命中处理
 
-候选按 `(file, variable)` 去重，同一初始化器的多处文本命中只算一个候选。
+候选按 `(file, 初始化器声明起始行)` 去重，同一初始化器的多处文本命中只算一个候选；同名但声明行不同的初始化器不得合并。
 
 - 候选数为 0：按“失败处理”报 `service_not_found`。
 - 候选数为 1：直接使用该候选，无论其注册形式。
@@ -467,7 +470,7 @@ xargs -r -a "<out>/tmp/scope_files.txt" -d '\n' grep -I -H -n -F -w "<entry_var>
 
 失败一律按第四章写入 `progress.error = {code, message, evidence}`，保留 `phase = locate_entry`，不写 `entry_state.json`，不进入阶段二，停止。
 
-- `service_not_found`：没有任何合法候选。`message` 必须包含 scope 文件数（`scope_files.txt` 行数）和已搜索模式（至少 `"<service_name>"`）；`evidence` 列出被拒命中及其原因；零命中时明确写“0 命中”。
+- `service_not_found`：没有任何合法候选。`message` 必须包含 scope 文件数（`scope_files.txt` 行数）和已搜索模式（至少 `"<service_name>"`），并建议检查 service_name 拼写与 clean_code.txt 覆盖范围；`evidence` 列出被拒命中及其原因；零命中时明确写“0 命中”。
 - `bind_not_found`：已选定唯一候选，但 `.Bind` 缺失、为空或为 `NULL` / `nullptr`。`message` 与 `evidence` 记录 `entry` 变量、文件、行号及 `.Bind` 原文/缺失情况。该检查在多命中消歧之后执行；失败时不写 `entry_state.json`，下次运行因无有效状态会重跑阶段一并重新校验。
 
 ### 阶段产物
