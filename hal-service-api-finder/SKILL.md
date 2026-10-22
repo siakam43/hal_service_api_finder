@@ -572,7 +572,7 @@ deviceObject->service = &hdfDemoHost->ioService;
 
 在内存中初始化：
 
-1. `entry_dispatchers` 原样记录阶段二的全部 Dispatch 条目（包括 `file == null` 的条目）。
+1. `service_name` 取 `02_bind.json` 的顶层 `service_name`；`entry_dispatchers` 原样记录阶段二的全部 Dispatch 条目（包括 `file == null` 的条目）。
 2. `queue`、`cases`、`handlers`、`default_cases`、`unresolved`、`dispatch_cache`、`visited` 初始化为空数组。
 3. 对每个 `dispatch_functions` 条目：
    - `file` 非 null：创建一个工作项，字段为 `id`、`dispatcher`、`dispatcher_file`、`dispatcher_line`、`current_cmd_expr`、`current_cmd_value`、`outer_cmd_expr`、`outer_cmd_value`、`data_vars`、`parent_case_id`、`path`：
@@ -595,7 +595,7 @@ deviceObject->service = &hdfDemoHost->ioService;
 
 队列非空时反复执行：
 
-1. 取出队列中的第一个工作项。
+1. 读取队列中的第一个工作项（不移出队列；处理完在第 7 步移除）。
 2. 定位并完整读取 dispatcher 定义：已知 `dispatcher_file` / `dispatcher_line` 时直接 Read 该文件，从签名行读到配对的闭合 `}`；否则按「正则/词边界搜索」在 scope 内搜索精确名称，只接受带完整函数体的定义（调用、声明、注释、字符串中的同名文本不算），并读完整函数体。C++ 限定名找不到定义时，在 scope 内的类体中搜索未限定方法名，但记录限定名。定义不在 scope 内或无法唯一确定 → 记 `unresolved`（`kind = "definition"`），移除该工作项并继续。
 3. 按 3.4 确定 `effective_outer`。
 4. 识别函数体内的全部分发结构（见 3.3）。
@@ -777,9 +777,9 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 - case 以 `(dispatcher_file, dispatcher_line, dispatch_site.file, dispatch_site.line, case_expr, outer_cmd_expr, outer_cmd_value)` 去重；重复命中时复用已有 case id，合并 evidence 与 handlers。
 - handler 以 `(cmd_id_macro, cmd_id_value, interface_function, file, definition_line)` 去重；同一业务函数在不同 cmdId 下分别保留多条记录。
 - `default_cases` 以 `(dispatcher_file, dispatcher_line, dispatch_site.file, dispatch_site.line)` 去重。
-- `unresolved` 以 `(kind, detail)` 去重，`tried` 合并后去重。
+- `unresolved` 以 `(kind, detail)` 去重，`tried` 合并后去重；同类候选只在首次出现时写 detail，后续补入 tried。
 - `dispatch_cache` 以 `(site.file, site.line, target)` 去重，条目包含 `site`、`target`、`candidates`、`resolved`。
-- `visited` 条目记录函数定义信息与 cmd 上下文；以环检测键去重。
+- `visited` 条目记录函数定义信息与 cmd 上下文：`dispatcher`、`dispatcher_file`、`dispatcher_line`、`current_cmd_expr`、`current_cmd_value`、`outer_cmd_expr`、`outer_cmd_value`、`data_vars`、`data_derived`、`path`；以环检测键去重。
 - `unresolved.kind` 取值：`cmd_value` / `target` / `definition` / `data_deferred` / `cycle`。
 
 收尾：
@@ -797,9 +797,9 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 }
 ```
 
-- 写入失败 → 删除可能残留的 `<out>/03_trace.json`，再写 `error.json`（`phase = "trace_dispatch"`，`code = "snapshot_write_failed"`），停止。
+- 写入失败 → 删除可能残留的 `<out>/03_trace.json`，再写 `error.json`（`phase = "trace_dispatch"`，`code = "snapshot_write_failed"`，message/evidence 记录写入错误），停止。
 - 写入成功后进入 `## 八、输出与自检`。
-- 全局失败（工具/文件 I/O 或无法继续读取源码等不可恢复错误）→ 若已有部分追踪结果，先写 `03_trace.json` 的部分快照，再写 `error.json`（`phase = "trace_dispatch"`），停止；单个分支的解析失败只写 `unresolved`，不中止整体追踪。
+- 其他全局失败（工具/文件 I/O 或无法继续读取源码等不可恢复错误）→ 若已有部分追踪结果，先写 `<out>/03_trace.json` 的部分快照，再写 `error.json`（`phase = "trace_dispatch"`，`code = "internal_error"`，message/evidence 记录失败详情），停止；单个分支的解析失败只写 `unresolved`，不中止整体追踪。
 
 ## 八、输出与自检
 

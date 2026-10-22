@@ -603,6 +603,18 @@ with:
 2. `queue`、`cases`、`handlers`、`default_cases`、`unresolved`、`dispatch_cache`、`visited` 初始化为空数组。
 ```
 
+Replace item 1:
+
+```text
+1. `entry_dispatchers` 原样记录阶段二的全部 Dispatch 条目（包括 `file == null` 的条目）。
+```
+
+with:
+
+```text
+1. `service_name` 取 `02_bind.json` 的顶层 `service_name`；`entry_dispatchers` 原样记录阶段二的全部 Dispatch 条目（包括 `file == null` 的条目）。
+```
+
 Remove all `status = pending` text from work-item creation, and delete the `status` field from the work-item field list. The queue is a plain FIFO; no item status is persisted.
 
 - [ ] **Step 3: Remove per-work-item state saves in 3.2**
@@ -616,7 +628,7 @@ Replace:
 with:
 
 ```text
-1. 取出队列中的第一个工作项。
+1. 读取队列中的第一个工作项（不移出队列；处理完在第 7 步移除）。
 ```
 
 Replace:
@@ -665,9 +677,9 @@ Replace the paragraph beginning `处理期间 `trace_state.status` ...` and the 
 - case 以 `(dispatcher_file, dispatcher_line, dispatch_site.file, dispatch_site.line, case_expr, outer_cmd_expr, outer_cmd_value)` 去重；重复命中时复用已有 case id，合并 evidence 与 handlers。
 - handler 以 `(cmd_id_macro, cmd_id_value, interface_function, file, definition_line)` 去重；同一业务函数在不同 cmdId 下分别保留多条记录。
 - `default_cases` 以 `(dispatcher_file, dispatcher_line, dispatch_site.file, dispatch_site.line)` 去重。
-- `unresolved` 以 `(kind, detail)` 去重，`tried` 合并后去重。
+- `unresolved` 以 `(kind, detail)` 去重，`tried` 合并后去重；同类候选只在首次出现时写 detail，后续补入 tried。
 - `dispatch_cache` 以 `(site.file, site.line, target)` 去重，条目包含 `site`、`target`、`candidates`、`resolved`。
-- `visited` 条目记录函数定义信息与 cmd 上下文；以环检测键去重。
+- `visited` 条目记录函数定义信息与 cmd 上下文：`dispatcher`、`dispatcher_file`、`dispatcher_line`、`current_cmd_expr`、`current_cmd_value`、`outer_cmd_expr`、`outer_cmd_value`、`data_vars`、`data_derived`、`path`；以环检测键去重。
 - `unresolved.kind` 取值：`cmd_value` / `target` / `definition` / `data_deferred` / `cycle`。
 ```
 
@@ -689,9 +701,9 @@ Replace the `收尾与状态切换` block with:
 }
 ```
 
-- 写入失败 → 删除可能残留的 `<out>/03_trace.json`，再写 `error.json`（`phase = "trace_dispatch"`，`code = "snapshot_write_failed"`），停止。
+- 写入失败 → 删除可能残留的 `<out>/03_trace.json`，再写 `error.json`（`phase = "trace_dispatch"`，`code = "snapshot_write_failed"`，message/evidence 记录写入错误），停止。
 - 写入成功后进入 `## 八、输出与自检`。
-- 全局失败（工具/文件 I/O 或无法继续读取源码等不可恢复错误）→ 若已有部分追踪结果，先写 `03_trace.json` 的部分快照，再写 `error.json`（`phase = "trace_dispatch"`），停止；单个分支的解析失败只写 `unresolved`，不中止整体追踪。
+- 其他全局失败（工具/文件 I/O 或无法继续读取源码等不可恢复错误）→ 若已有部分追踪结果，先写 `<out>/03_trace.json` 的部分快照，再写 `error.json`（`phase = "trace_dispatch"`，`code = "internal_error"`，message/evidence 记录失败详情），停止；单个分支的解析失败只写 `unresolved`，不中止整体追踪。
 ````
 
 - [ ] **Step 6b: Clean up 3.6 wording and the 3.9 heading**
@@ -896,6 +908,12 @@ Add a row:
 
 ```text
 | `snapshot_write_failed` | 01_entry.json / 02_bind.json / 03_trace.json 写入失败 | 报告，结束 |
+```
+
+Add a row:
+
+```text
+| `internal_error` | 工具/文件 I/O 或无法继续读取源码等不可恢复错误 | 报告，结束 |
 ```
 
 Update `output_write_failed` to:

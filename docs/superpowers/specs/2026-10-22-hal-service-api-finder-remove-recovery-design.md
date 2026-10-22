@@ -215,7 +215,7 @@ mkdir -p "<out>" || { echo 'output_dir_failed' >&2; exit 1; }
 - 保留环检测、分发点缓存、case/handler 去重；这些是单次运行的正确性机制，不是恢复机制。
 - 队列为空后 → 写 `03_trace.json`，进入输出。
 - 全局失败指工具/文件 I/O 或无法继续读取源码等不可恢复错误；单个分支的解析失败只记 `unresolved`，不中止。
-- 全局失败 → 若已收集到部分追踪结果，先写 `03_trace.json` 的部分快照，再写 `error.json`；否则只写 `error.json`。
+- 全局失败 → 若已收集到部分追踪结果，先写 `03_trace.json` 的部分快照，再写 `error.json`（`code = "internal_error"`）；否则只写 `error.json`（`code = "internal_error"`）。
 
 ### 5.5 输出
 
@@ -240,7 +240,7 @@ mkdir -p "<out>" || { echo 'output_dir_failed' >&2; exit 1; }
 - 保留的错误码：
   - `usage_error`、`invalid_project_dir`、`output_dir_failed`、`empty_scope`；
   - `service_not_found`、`multiple_matches`、`bind_not_found`、`bind_definition_not_found`、`bind_ambiguous`、`dispatch_not_found`；
-  - `snapshot_write_failed`、`self_check_failed`、`output_write_failed`。
+  - `snapshot_write_failed`、`internal_error`、`self_check_failed`、`output_write_failed`。
 - 不再有 `progress.error`。
 
 ## 8. 保留的不变量
