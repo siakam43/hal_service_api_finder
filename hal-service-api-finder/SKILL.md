@@ -35,14 +35,6 @@ description: 当用户调用 /hal-service-api-finder <project_dir> <service_name
 - interface_function：定义处的作用域限定名。
 - file：函数定义所在文件的绝对路径。
 
-中间结果（均位于输出根目录 `<out>`，定义见第三章）：
-- scope_files.txt
-- scope_roots.txt（仅 clean_code.txt 分支存在）
-- 01_entry.json
-- 02_bind.json
-- 03_trace.json
-- error.json（仅失败时）
-
 不生成 summary 报告。
 
 ### 完成报告
@@ -163,108 +155,17 @@ grep -I -H -n -E "<pattern>" "<file>"
 
 ## 四、中间结果记录
 
-本 skill 不做任务恢复。中间结果用于阶段交接与调试。
+中间文件（均位于 `<out>`）：
+- scope_files.txt
+- scope_roots.txt（仅 clean_code.txt 分支存在）
+- 01_entry.json
+- 02_bind.json
+- 03_trace.json
+- error.json（仅失败时）
 
-### 4.1 阶段快照
+`01_entry.json`、`02_bind.json`、`03_trace.json` 的格式分别在第五、六、七章说明。`error.json` 为所有阶段共用的失败产物，格式如下。
 
-中间快照直接写入 `<out>`，不要求原子写入；写入失败 → 报 `snapshot_write_failed`，停止。最终 `<service_name>_api.json` 仍采用临时文件 + `mv`。
-
-#### 01_entry.json
-
-```json
-{
-  "service_name": "demo_service",
-  "scope": {
-    "file_count": 123,
-    "clean_code": true,
-    "scope_files": "scope_files.txt",
-    "scope_roots": "scope_roots.txt"
-  },
-  "entry": {
-    "variable": "g_DemoDriverEntry",
-    "file": "/abs/path/...",
-    "line": 39,
-    "module_name": "demo_service",
-    "bind": "HdfDemoDriverBind",
-    "init": "HdfDemoDriverInit",
-    "release": "HdfDemoDriverRelease",
-    "registration": {
-      "form": "HDF_INIT",
-      "file": "/abs/path/...",
-      "line": 50,
-      "evidence": "HDF_INIT(g_DemoDriverEntry)"
-    }
-  }
-}
-```
-
-#### 02_bind.json
-
-```json
-{
-  "service_name": "demo_service",
-  "entry": {
-    "variable": "g_DemoDriverEntry",
-    "file": "/abs/path/...",
-    "module_name": "demo_service"
-  },
-  "bind": {
-    "function": "HdfDemoDriverBind",
-    "file": "/abs/path/...",
-    "line": 72,
-    "host_type": "HdfDemoHost",
-    "dispatch_functions": [
-      {
-        "name": "DemoDriverDispatch",
-        "file": "/abs/path/...",
-        "line": 129,
-        "via": "hdfDemoHost->ioService.Dispatch"
-      }
-    ],
-    "stub": {
-      "member": "stub",
-      "interface_type": "IDemoInterface",
-      "impl_class": "DemoService",
-      "impl_file": "/abs/path/...",
-      "stub_class": "DemoInterfaceStub",
-      "on_remote_request": {
-        "name": "OHOS::HDI::Demo::V1_0::DemoInterfaceStub::OnRemoteRequest",
-        "file": "/abs/path/...",
-        "line": 160
-      },
-      "evidence": "hdfDemoHost->stub = ...GetOrNewObject(serviceImpl, IDemoInterface::GetDescriptor())"
-    },
-    "service_registration": {
-      "file": "/abs/path/...",
-      "line": 110,
-      "evidence": "deviceObject->service = &hdfDemoHost->ioService"
-    }
-  }
-}
-```
-
-#### 03_trace.json
-
-```json
-{
-  "service_name": "demo_service",
-  "entry_dispatchers": [],
-  "cases": [],
-  "handlers": [],
-  "default_cases": [],
-  "unresolved": []
-}
-```
-
-- 队列、`visited`、`dispatch_cache` 只存在于内存，阶段三结束后不写入文件。
-- 不写 `status`、`phase`、`counters`、`queue`、`visited`、`dispatch_cache`。
-- `cases` 元素字段：`id`、`dispatcher`、`dispatcher_file`、`dispatcher_line`、`dispatch_site`、`level`、`case_expr`、`case_value`、`outer_cmd_expr`、`outer_cmd_value`、`parent_case_id`、`handlers`、`evidence`；其中 `handlers` 是 `{name, file, line}` 引用列表。
-- 顶层 `handlers` 元素字段：`cmd_id_macro`、`cmd_id_value`、`interface_function`、`file`、`definition_line`；`definition_line` 仅用于定位与去重，最终 JSON 不包含。
-- `default_cases` 元素字段：`dispatcher`、`dispatcher_file`、`dispatcher_line`、`dispatch_site`、`evidence`。
-- `unresolved` 元素字段：`kind`、`detail`、`tried`；`kind` 取 `cmd_value` / `target` / `definition` / `data_deferred` / `cycle`。
-- 以上元素都不写 status 等状态字段。
-
-#### error.json
+### 4.1 error.json
 
 仅在失败时写入：
 
@@ -277,7 +178,7 @@ grep -I -H -n -E "<pattern>" "<file>"
 }
 ```
 
-`phase` 取值：`init` / `locate_entry` / `analyze_bind` / `trace_dispatch` / `output`，只作失败位置标签，不参与恢复。写入 error.json 后停止；不写最终 JSON。
+`phase` 取值：`init` / `locate_entry` / `analyze_bind` / `trace_dispatch` / `output`，只作失败位置标签。写入 error.json 后停止；不写最终 JSON。
 error.json 只在新 `<out>` 已成功创建后写入；备份/mv/mkdir 失败只在对话中报告。若 error.json 本身写入失败，改为在对话中报告，不再重试。
 
 ## 五、阶段一：定位服务注册点
