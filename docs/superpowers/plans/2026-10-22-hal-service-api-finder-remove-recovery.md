@@ -69,7 +69,7 @@ mkdir -p "<out>" || { echo 'output_dir_failed' >&2; exit 1; }
 - 只有 `<out>` 目录存在时才处理备份；`<out>` 不存在时保留现有 `<out>_bak`。整段在同一个 shell 中一次执行，失败时向 stderr 输出 `output_dir_failed`。
 - `<out>` / `<out>_bak` 按目录处理；若同名路径是普通文件，`mv`/`mkdir` 会失败并报 `output_dir_failed`。
 - 已有 `<out>` 时，若 `<out>_bak` 存在则先删除，再把 `<out>` 整体 `mv` 为 `<out>_bak`，只保留最近一次备份。旧最终 JSON、阶段快照、scope 文件、error.json 一并保留在备份中。
-- 新目录创建后重新生成 `scope_files.txt` / `scope_roots.txt`。
+- 新目录创建后重新生成 `<out>/scope_files.txt`；存在 `clean_code.txt` 时同时生成 `<out>/scope_roots.txt`。
 - 不读取旧结果，不判断 project/service 匹配，不续跑。
 - 所有路径变量使用双引号；`<project_dir>` 来自用户参数，替换时按 shell 规则转义。
 - `rm`/`mv`/`mkdir` 任一步失败 → 报 `output_dir_failed`，停止；若新 `<out>` 未成功创建，只在对话中报告，不写 error.json。
@@ -253,7 +253,7 @@ Replace:
 with:
 
 ```text
-中间结果（均位于 <out>）：
+中间结果（均位于输出根目录 `<out>`，定义见第三章）：
 - scope_files.txt
 - scope_roots.txt（仅 clean_code.txt 分支存在）
 - 01_entry.json
@@ -273,7 +273,7 @@ Delete:
 Replace it with:
 
 ```text
-- 每次执行都重新生成 `scope_files.txt` / `scope_roots.txt`，不读取旧 scope。
+- 每次执行都重新生成 `<out>/scope_files.txt`；`<out>/scope_roots.txt` 仅在存在 `clean_code.txt` 时生成；不读取旧 scope。
 ```
 
 - [ ] **Step 3: Verify the output-directory initialization in section 三**
