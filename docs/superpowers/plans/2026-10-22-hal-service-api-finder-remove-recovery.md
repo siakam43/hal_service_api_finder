@@ -40,6 +40,7 @@ cd /home/admin/cc/wksp/siakam_security_skills/hal_service_api_finder
 
 **Files:**
 - Modify: `hal-service-api-finder/SKILL.md` (replace `## 四、任务恢复机制` through just before `## 五、阶段一：定位服务注册点`)
+- Also authorized as part of the Task 1 quality fix (commit b2e1775): update the `### 输出目录初始化` block in section 三 to remove the stale `tmp/` mkdir and point to section 4.1.
 
 - [ ] **Step 1: Replace the entire old section 四**
 
@@ -270,18 +271,9 @@ Replace it with:
 - 每次执行都重新生成 `scope_files.txt` / `scope_roots.txt`，不读取旧 scope。
 ```
 
-- [ ] **Step 3: Replace the output-directory initialization in section 三**
+- [ ] **Step 3: Verify the output-directory initialization in section 三**
 
-Replace:
-
-```text
-- 输出根目录：`<out>` = `<project_dir>/.ethunter_out/hal-service-api-finder`。
-- 执行 `mkdir -p <project_dir>/.ethunter_out/hal-service-api-finder/tmp`。
-- 创建失败（权限不足、只读文件系统、同名文件占用等）→ 报错 `output_dir_failed` 并结束。
-- 后续所有中间文件与最终 `<service_name>_api.json` 均写入 `<out>`。
-```
-
-with:
+This replacement was already applied in b2e1775 (pulled into Task 1 by its quality fix). Verify the block reads exactly:
 
 ```text
 - 输出根目录：`<out>` = `<project_dir>/.ethunter_out/hal-service-api-finder`。
@@ -289,6 +281,8 @@ with:
 - 不创建 `tmp/` 子目录；所有快照、scope 文件与最终 JSON 均直接写入 `<out>`。
 - 备份/新建失败 → 报 `output_dir_failed` 并结束。
 ```
+
+If it differs, replace it with the text above. No-op expected.
 
 - [ ] **Step 4: Update all scope-file paths in section 三**
 
