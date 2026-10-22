@@ -561,34 +561,33 @@ deviceObject->service = &hdfDemoHost->ioService;
 
 ## 七、阶段三：cmdId 分发追踪
 
-阶段三只做一件事：从阶段二的 Dispatch（或 stub 的 OnRemoteRequest）出发，沿全部分发路径追踪 cmdId 与 data 的流向，把每个最外层 cmdId 分支直接消费 data 的业务函数记为接口函数候选，写入 `trace_state.json`。本阶段只追踪到 cmdId 处理位置，不展开接口函数内部实现，不做完整污点传播。
+阶段三只做一件事：从阶段二的 Dispatch（或 stub 的 OnRemoteRequest）出发，沿全部分发路径追踪 cmdId 与 data 的流向，把每个最外层 cmdId 分支直接消费 data 的业务函数记为接口函数候选，写出 `03_trace.json`。本阶段只追踪到 cmdId 处理位置，不展开接口函数内部实现，不做完整污点传播。
 
 - 不设深度上限、不设扇出上限；所有静态可确定的目标全部追踪，环检测是唯一的循环保护。
 - 接口函数定义必须在 scope 内；定义在 scope 外时记入 `unresolved`，不输出、不臆造。
 
 ### 3.1 输入与队列初始化
 
-输入取自 `entry_state.json` 的 `bind`：`dispatch_functions`（`name` / `file` / `line` / `via`）、`stub.on_remote_request`、`stub.stub_class`、`stub.interface_type`、`stub.impl_class`。`bind.host_type` 与 `bind.service_registration` 只作证据，不参与追踪。
+输入取自 `02_bind.json` 的 `bind`：`dispatch_functions`（`name` / `file` / `line` / `via`）、`stub.on_remote_request`、`stub.stub_class`、`stub.interface_type`、`stub.impl_class`。`bind.host_type` 与 `bind.service_registration` 只作证据，不参与追踪。
 
-按第四章的 `trace_state.json` 字段形状初始化：
+在内存中初始化：
 
-1. `status = in_progress`，`service_name` 取当前服务名。
-2. `entry_dispatchers` 原样记录阶段二的全部 Dispatch 条目（包括 `file == null` 的条目）。
-3. `queue`、`cases`、`handlers`、`default_cases`、`unresolved`、`dispatch_cache`、`visited` 初始化为空数组；`counters` 按实际数组长度重算。
-4. 对每个 `dispatch_functions` 条目：
-   - `file` 非 null：创建一个 `status = pending` 的工作项，字段为 `id`、`dispatcher`、`dispatcher_file`、`dispatcher_line`、`current_cmd_expr`、`current_cmd_value`、`outer_cmd_expr`、`outer_cmd_value`、`data_vars`、`parent_case_id`、`path`：
+1. `entry_dispatchers` 原样记录阶段二的全部 Dispatch 条目（包括 `file == null` 的条目）。
+2. `queue`、`cases`、`handlers`、`default_cases`、`unresolved`、`dispatch_cache`、`visited` 初始化为空数组。
+3. 对每个 `dispatch_functions` 条目：
+   - `file` 非 null：创建一个工作项，字段为 `id`、`dispatcher`、`dispatcher_file`、`dispatcher_line`、`current_cmd_expr`、`current_cmd_value`、`outer_cmd_expr`、`outer_cmd_value`、`data_vars`、`parent_case_id`、`path`：
      - `id` 从 1 递增；`dispatcher` / `dispatcher_file` / `dispatcher_line` 取条目值；
      - `current_cmd_expr` 记该 Dispatch 实际承载 cmdId 的表达式：优先 cmdId 形参名（如 `cmdId`）；若 cmdId 由 `HdfSbufReadUint32(data, &cmdId)` 等从 data 读入局部变量，则读函数体后修正为该局部变量；`current_cmd_value = null`；
      - `outer_cmd_expr = null`，`outer_cmd_value = null`；
      - `data_vars` 记签名中的 data 形参（通常为 `["data"]`），`data_derived = true`，后续按 3.5 更新；
-     - `parent_case_id = null`，`path = [dispatcher]`，`status = pending`。
+     - `parent_case_id = null`，`path = [dispatcher]`。
    - `file == null`：不创建工作项，写一条 `unresolved`：`{kind: "definition", detail: "Dispatch <name> 定义不在 scope 内", tried: [<via>, <已执行的 scope 搜索模式>]}`。
-5. 若所有 Dispatch 条目都被跳过（初始队列为空）且 `stub.on_remote_request` 非 null：用该 OnRemoteRequest 创建初始工作项：
+4. 若所有 Dispatch 条目都被跳过（初始队列为空）且 `stub.on_remote_request` 非 null：用该 OnRemoteRequest 创建初始工作项：
    - `dispatcher` / `dispatcher_file` / `dispatcher_line` 取 `on_remote_request` 的值；
    - `current_cmd_expr` 取 OnRemoteRequest 的 cmdId 形参（通常为 `code`），`current_cmd_value = null`；
    - `outer_cmd_expr = null`，`outer_cmd_value = null`，`parent_case_id = null`；
-   - `data_vars` 取 data/parcel 形参（不含 `reply`、`option`）；`data_derived = true`；`path = [on_remote_request.name]`，`status = pending`。
-6. 若全部条目被跳过且 `on_remote_request` 也为 null：写一条 `unresolved`（`kind = "definition"`，detail 说明没有可用入口），不创建队列项，直接执行 3.9 的收尾。
+   - `data_vars` 取 data/parcel 形参（不含 `reply`、`option`）；`data_derived = true`；`path = [on_remote_request.name]`。
+5. 若全部条目被跳过且 `on_remote_request` 也为 null：写一条 `unresolved`（`kind = "definition"`，detail 说明没有可用入口），不创建队列项，直接执行 3.9 的收尾。
 
 初始 Dispatch 不预先入队 OnRemoteRequest；只有读取函数体确认其直接调用 `stub->SendRequest(cmdId, ...)` 时才入队（见 3.3、3.8）。这种直接转发的工作项 `outer_cmd_expr` / `outer_cmd_value` 仍为 null。
 
@@ -596,7 +595,7 @@ deviceObject->service = &hdfDemoHost->ioService;
 
 队列非空时反复执行：
 
-1. 取出第一个 `pending` 工作项，置为 `in_progress`，保存 `trace_state`。
+1. 取出队列中的第一个工作项。
 2. 定位并完整读取 dispatcher 定义：已知 `dispatcher_file` / `dispatcher_line` 时直接 Read 该文件，从签名行读到配对的闭合 `}`；否则按「正则/词边界搜索」在 scope 内搜索精确名称，只接受带完整函数体的定义（调用、声明、注释、字符串中的同名文本不算），并读完整函数体。C++ 限定名找不到定义时，在 scope 内的类体中搜索未限定方法名，但记录限定名。定义不在 scope 内或无法唯一确定 → 记 `unresolved`（`kind = "definition"`），移除该工作项并继续。
 3. 按 3.4 确定 `effective_outer`。
 4. 识别函数体内的全部分发结构（见 3.3）。
@@ -606,7 +605,7 @@ deviceObject->service = &hdfDemoHost->ioService;
    - 解析并分类分支内的每个调用目标（3.6、3.7）；
    - 接口函数候选写入 `handlers`；转发器与内层 dispatcher 入队（3.8）；无法确定的目标写入 `unresolved`。
 6. `default` 分支只写入 `default_cases`；函数体内没有任何 cmdId 分发结构时，按“无条件直接处理”规则处理（3.6）。
-7. 该工作项的全部分支处理完后，从 `queue` 移除该项，把环检测键追加到 `visited`，重算 counters，保存 `trace_state`（见 3.9）。
+7. 该工作项的全部分支处理完后，从 `queue` 移除该项，把环检测键追加到 `visited`（见 3.9）。
 8. 队列仍有项 → 继续下一项；队列为空 → 执行 3.9 收尾。
 
 必须读取完整控制流，不得只凭 grep 命中行或单个 case 片段下结论；同一函数内的嵌套分发、fallthrough、宏展开都要覆盖。
@@ -623,12 +622,11 @@ deviceObject->service = &hdfDemoHost->ioService;
 - **SendRequest / OnRemoteRequest 转发**：`stub->SendRequest(cmdId, data, reply)`、直接调用 `OnRemoteRequest`、调用已知 dispatcher。这些目标本身不是接口函数，按 3.8 入队；若转发位于某个 case 内，该 case 照常记录。
 - **无条件直接处理**：没有 cmdId 分支，但函数直接消费 data，或无条件调用 data 消费函数。按 3.6 的 `"*"` 规则记录。
 
-每个识别出的分支先写入 `cases`（字段见第四章：`id`、`dispatcher`、`dispatcher_file`、`dispatcher_line`、`dispatch_site`、`level`、`case_expr`、`case_value`、`outer_cmd_expr`、`outer_cmd_value`、`parent_case_id`、`status`、`handlers`、`evidence`）：
+每个识别出的分支先写入 `cases`（字段：`id`、`dispatcher`、`dispatcher_file`、`dispatcher_line`、`dispatch_site`、`level`、`case_expr`、`case_value`、`outer_cmd_expr`、`outer_cmd_value`、`parent_case_id`、`handlers`、`evidence`）：
 
 - `level` 取工作项 `path` 的长度（入口工作项为 1，每次转发入队 +1）；
 - `case_expr` 保留源码原文（宏名不替换为值）；
 - `outer_cmd_expr` / `outer_cmd_value` 按 3.4 填写；
-- `status` 先记 `pending`，该分支完整分析后改为 `analyzed`；
 - `evidence` 记分支条件、注册语句或表项原文。
 - `default_cases` 记录 `dispatcher`、`dispatcher_file`、`dispatcher_line`、`dispatch_site`、`evidence`；不写 handlers。
 
@@ -721,7 +719,7 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 - 一个分支有多个 data 消费目标 → 多条记录，每个目标各写一条 `handlers`，共用同一 `effective_outer`；同时把 `{name, file, line}` 追加到当前 case 的 `handlers`。
 - 若函数既有 cmdId 分支，又在 `switch`/`if` 之前无条件消费 data（如 `ParseCommon(data)`），该无条件调用按 `"*"` 规则记录，不归属任何具体 case。
 - 一个分支只有内联 data 处理、没有调用目标 → 把分发函数自身记为接口函数，`cmd_id_macro` / `cmd_id_value` 取 `effective_outer`；没有外层时 `cmd_id_macro = "*"`、`cmd_id_value = null`。在该 case 的 `evidence` 中记录内联处理代码原文。
-- `default` 分支只写入 `trace_state.default_cases`（记录 dispatcher、分发位置与 evidence），不进入最终 JSON。
+- `default` 分支只写入 `default_cases`（记录 dispatcher、分发位置与 evidence），不进入最终 JSON。
 - 无 cmdId 分支、无条件直接调用 data 消费函数 → 记为 `cmd_id_macro = "*"`、`cmd_id_value = null`，避免漏接口；`evidence` 说明“无条件直接处理”。
 - 只接收 cmdId、不接收 data、也不分发，或只接收 reply、不读 data 的目标，不得写入 `handlers`。
 - 纯日志/断言/框架转换/校验辅助等被忽略的调用，把调用原文与忽略原因追加到当前 case 的 `evidence`，不得静默丢弃。
@@ -736,7 +734,7 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 - 接口函数定义必须在 scope 内且必须是带完整函数体的定义；只有声明、定义在 scope 外或无法确定定义位置 → `unresolved`（`kind = "definition"`），不得写入 `handlers`，不得输出。
 - `stub->SendRequest` 特殊处理：优先使用阶段二记录的 `stub.on_remote_request`；缺失时再用 `stub.stub_class`、`stub.interface_type`、`stub.impl_class` 信息在 scope 内定位对应的 `Stub::OnRemoteRequest`；把 SendRequest 的 cmdId 实参映射为 OnRemoteRequest 的 `code`，data/parcel 实参映射为 data 参数。保留当前外层 cmd（无外层时新工作项外层为 null，OnRemoteRequest 的 case 因此成为外层）。找不到 OnRemoteRequest 定义 → `unresolved`（`kind = "definition"`），记录 stub 类名、接口名与已搜索位置。
 - 直接调用 `OnRemoteRequest`、调用已知 dispatcher、经宏/包装函数转发到上述目标的，按同样的映射与入队规则处理。
-- 每次解析调用目标后写/更新 `dispatch_cache`（`site`、`target`、`candidates`、`resolved`）；同一 site+target 复用缓存结果，不重复搜索。
+- 每次解析调用目标后写/更新内存中的 `dispatch_cache`（`site`、`target`、`candidates`、`resolved`）；同一 site+target 复用缓存结果，不重复搜索。
 - `stub` 为 null 时相关字段按 null 处理；SendRequest 接收者可静态识别且与阶段二记录的 stub 成员/类不匹配时，写 `unresolved`（`kind = "target"`），不静默映射到 `on_remote_request`。
 
 ### 3.8 入队规则
@@ -749,7 +747,7 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 - `data_vars` 记目标函数中与 data 派生实参对应的形参名（SendRequest 时为 data/parcel 形参）；调用点实参原文写入触发该入队的 case 的 `evidence`；
 - `data_derived`：本工作项是否含 data 派生实参（布尔），由调用点实参是否派生决定；
 - `parent_case_id` 取当前 case 的 id；无条件转发时为 null；
-- `path = 父工作项.path + [目标限定名]`，`status = pending`。
+- `path = 父工作项.path + [目标限定名]`。
 
 入队前做环检测与去重：
 
@@ -759,7 +757,7 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 - 同一目标以不同的 cmd 上下文到达时键不同，必须分别入队；不得因函数名相同而合并。
 - 不设深度上限、不设扇出上限：同一分支的全部转发器/内层 dispatcher 都入队，按队列逐个处理。
 
-### 3.9 终止条件、去重与状态保存
+### 3.9 终止条件、去重与收尾
 
 单个分支在以下任一条件满足时终止：
 
@@ -772,25 +770,36 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 - 同时分发并处理 data 的函数按 dispatcher 处理：继续分析其分支，不因它消费 data 就提前整体记为接口；只有满足 3.6“内联 data 处理且无调用目标”的分支才把 dispatcher 自身记为接口函数。
 - 不设深度上限、不设扇出上限；终止条件之外不得提前退出。
 
-处理期间 `trace_state.status` 保持 `in_progress`。每处理完一个工作项，按第四章的 schema 保存**完整** `trace_state`，包含全部字段：`status`、`service_name`、`entry_dispatchers`、`queue`、`cases`、`handlers`、`default_cases`、`unresolved`、`dispatch_cache`、`visited`、`counters`。先写 `<out>/tmp/trace_state.json.tmp`，再 `mv` 覆盖 `<out>/tmp/trace_state.json`。每次保存后重算：`queue_remaining = queue.length`、`cases_total = cases.length`、`handlers_total = handlers.length`、`unresolved_total = unresolved.length`。
+追踪期间不写状态文件。队列为空后，一次性写 `03_trace.json`。
 
-去重与幂等规则：
+单次运行内的去重规则：
 
-- 工作项以环检测键去重；恢复时把 `in_progress` 工作项置回 `pending`，重新读取 dispatcher，重做该工作项的全部分支；case/handlers 按去重键合并，不重复输出。
-- case 以 `(dispatcher_file, dispatcher_line, dispatch_site.file, dispatch_site.line, case_expr, outer_cmd_expr, outer_cmd_value)` 去重；重复命中时复用已有 case id，合并 evidence 与 handlers，不新建。
-- 分支以 3.9 任一条件终止后，将该 case 置为 `analyzed`。
+- case 以 `(dispatcher_file, dispatcher_line, dispatch_site.file, dispatch_site.line, case_expr, outer_cmd_expr, outer_cmd_value)` 去重；重复命中时复用已有 case id，合并 evidence 与 handlers。
 - handler 以 `(cmd_id_macro, cmd_id_value, interface_function, file, definition_line)` 去重；同一业务函数在不同 cmdId 下分别保留多条记录。
 - `default_cases` 以 `(dispatcher_file, dispatcher_line, dispatch_site.file, dispatch_site.line)` 去重。
-- `unresolved` 以 `(kind, detail)` 去重，`tried` 合并后去重；同类候选只在首次出现时写 detail，后续补入 tried。
-- `dispatch_cache` 以 `(site.file, site.line, target)` 去重，条目包含 `site`、`target`、`candidates`、`resolved`；已解析的调用点复用缓存结果，不重复搜索。
-- `visited` 条目记录函数定义信息与 cmd 上下文：`dispatcher`、`dispatcher_file`、`dispatcher_line`、`current_cmd_expr`、`current_cmd_value`、`outer_cmd_expr`、`outer_cmd_value`、`data_vars`、`data_derived`、`path`；以环检测键去重。
+- `unresolved` 以 `(kind, detail)` 去重，`tried` 合并后去重。
+- `dispatch_cache` 以 `(site.file, site.line, target)` 去重，条目包含 `site`、`target`、`candidates`、`resolved`。
+- `visited` 条目记录函数定义信息与 cmd 上下文；以环检测键去重。
 - `unresolved.kind` 取值：`cmd_value` / `target` / `definition` / `data_deferred` / `cycle`。
 
-收尾与状态切换：
+收尾：
 
-- 队列为空后，将 `trace_state.status` 置为 `self_check`，重算 counters 并以原子方式保存；`progress.phase` 保持 `trace_dispatch`，`trace_dispatch.status` 保持 `in_progress`，`error = null`。不得在此处设置 `progress.phase = output`，输出门禁由第八章负责。
-- 保存后进入 `## 八、输出与自检`。
-- 全局失败（状态文件 I/O 失败、无法读取或写入、身份冲突等不可恢复错误）→ 按第四章写入 `progress.error = {code, message, evidence}`，保持 `phase = trace_dispatch`，停止；不得清空旧状态。单个分支的解析失败只写 `trace_state.unresolved`，不中止整体追踪。
+- 队列为空后，写 `<out>/03_trace.json`：
+
+```json
+{
+  "service_name": "<service_name>",
+  "entry_dispatchers": [],
+  "cases": [],
+  "handlers": [],
+  "default_cases": [],
+  "unresolved": []
+}
+```
+
+- 写入失败 → 删除可能残留的 `<out>/03_trace.json`，再写 `error.json`（`phase = "trace_dispatch"`，`code = "snapshot_write_failed"`），停止。
+- 写入成功后进入 `## 八、输出与自检`。
+- 全局失败（工具/文件 I/O 或无法继续读取源码等不可恢复错误）→ 若已有部分追踪结果，先写 `03_trace.json` 的部分快照，再写 `error.json`（`phase = "trace_dispatch"`），停止；单个分支的解析失败只写 `unresolved`，不中止整体追踪。
 
 ## 八、输出与自检
 

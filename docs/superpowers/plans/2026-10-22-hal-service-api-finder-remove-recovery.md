@@ -689,10 +689,36 @@ Replace the `收尾与状态切换` block with:
 }
 ```
 
-- 写入失败 → 写 `error.json`（`phase = "trace_dispatch"`，`code = "snapshot_write_failed"`），停止。
+- 写入失败 → 删除可能残留的 `<out>/03_trace.json`，再写 `error.json`（`phase = "trace_dispatch"`，`code = "snapshot_write_failed"`），停止。
 - 写入成功后进入 `## 八、输出与自检`。
 - 全局失败（工具/文件 I/O 或无法继续读取源码等不可恢复错误）→ 若已有部分追踪结果，先写 `03_trace.json` 的部分快照，再写 `error.json`（`phase = "trace_dispatch"`），停止；单个分支的解析失败只写 `unresolved`，不中止整体追踪。
 ````
+
+- [ ] **Step 6b: Clean up 3.6 wording and the 3.9 heading**
+
+In 3.6, replace:
+
+```text
+- `default` 分支只写入 `trace_state.default_cases`（记录 dispatcher、分发位置与 evidence），不进入最终 JSON。
+```
+
+with:
+
+```text
+- `default` 分支只写入 `default_cases`（记录 dispatcher、分发位置与 evidence），不进入最终 JSON。
+```
+
+Replace the 3.9 heading:
+
+```text
+### 3.9 终止条件、去重与状态保存
+```
+
+with:
+
+```text
+### 3.9 终止条件、去重与收尾
+```
 
 - [ ] **Step 7: Verify Task 5**
 
