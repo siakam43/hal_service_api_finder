@@ -1,0 +1,959 @@
+# hal-service-api-finder 设计规格
+
+- 日期：2026-10-22
+- 状态：设计已确认，待实现
+- 交付物：`hal-service-api-finder/SKILL.md`（纯 markdown，无脚本，无 sub-agent）
+
+## 1. 背景与目标
+
+开发一个纯 markdown 的 skill，名为 `hal-service-api-finder`。该 skill 根据 OpenHarmony/HDF HAL 层 service 的注册流程，识别指定 service 对外提供的全部接口函数。
+
+核心判断链路：
+
+```text
+HdfDriverEntry.moduleName 精确定位
+  → HdfDriverEntry 初始化（.Bind）
+  → Bind 函数
+  → Host 结构体 + Dispatch 函数
+  → cmdId 分发
+  → 每个 cmdId 用例直接调用的接口函数
+```
+
+最终输出 cmdId 到接口函数的 JSON 映射，供后续安全攻击面分析使用。
+
+## 2. 术语
+
+| 用词 | 含义 |
+|------|------|
+| 服务注册点 | 通过 moduleName 精确定位到的 `HdfDriverEntry` 定义及其注册引用 |
+| 服务入口变量 | `HdfDriverEntry` 类型的变量，如 `g_ArDriverEntry` |
+| Bind 函数 | 入口结构体 `.Bind` 字段指向的函数 |
+| Dispatch 函数 | Bind 阶段链接到 Host 的 `ioService.Dispatch`（或等价成员）的函数 |
+| 分发函数 | 根据 cmdId 选择处理路径的函数，包括 Dispatch、转发器、OnRemoteRequest、内层分发函数 |
+| cmdId 用例 | 分发结构中的一个具体 case 或条件分支 |
+| 外层 cmd | 调用链上最外层的具体 cmdId 用例的宏/表达式和值 |
+| 接口函数 | cmdId 用例分支中直接接收客户端 data（或 data 派生值）的业务函数 |
+| 工作项 | 追踪队列中的单元：`(分发函数, 当前 cmdId 变量, 外层 cmd, data 变量, 调用路径)` |
+| 中间结果 | `progress.json`、`tmp/entry_state.json`、`tmp/trace_state.json` 等状态文件 |
+| scope_files | 分析范围内展开后的精确文件清单 |
+| scope_roots | clean_code.txt 中原始的文件/文件夹条目清单 |
+
+## 3. 输入、输出与交付
+
+### 3.1 调用方式
+
+```text
+/hal-service-api-finder <project_dir> <service_name>
+```
+
+- 两个参数均必填且不能为空；缺失任意一个，打印用法并结束。
+- `project_dir` 必须是已存在的目录；相对路径转换为绝对路径后使用。
+- `service_name` 是 `HdfDriverEntry.moduleName` 的精确字符串，区分大小写，不做模糊匹配、不做大小写归一化。
+- 参数多于两个时，打印用法并结束。
+
+### 3.2 输出位置
+
+```text
+<project_dir>/.ethunter_out/hal-service-api-finder/
+  progress.json
+  tmp/scope_files.txt
+  tmp/scope_roots.txt
+  tmp/entry_state.json
+  tmp/trace_state.json
+  <service_name>_api.json
+```
+
+- 输出目录不存在时用 `mkdir -p` 创建；创建失败则报告并结束。
+- 最终文件名固定为 `<service_name>_api.json`，例如 `ar_service_api.json`。
+- 不生成 summary 报告；调试信息全部保存在中间结果中。
+
+### 3.3 交付物
+
+- 只创建 `hal-service-api-finder/SKILL.md`。
+- skill 目录内不放置脚本、测试代码或样例工程。
+
+## 4. 总体架构
+
+采用“分阶段状态机 + 工作队列”：
+
+```text
+locate_entry → analyze_bind → trace_dispatch → output → done
+                    │                │
+                    └── entry_state  └── trace_state
+```
+
+| 阶段 | 产物 | 说明 |
+|------|------|------|
+| locate_entry | entry_state.entry | 按 moduleName 精确定位入口、Bind |
+| analyze_bind | entry_state.bind | 提取 Dispatch、stub、实现类 |
+| trace_dispatch | trace_state | 工作队列追踪 cmdId 分发 |
+| output | `<service_name>_api.json` | 自检后组装最终 JSON |
+| done | progress.json | 报告完成 |
+
+- 全部由主 agent 完成，不调用 sub-agent。
+- 每个工作项处理完立即保存 trace_state，断点最多丢失一个工作项。
+- 不设深度上限、不设扇出上限；只有明确的终止条件（见 8.6）。
+
+## 5. 分析与搜索边界
+
+### 5.1 clean_code.txt 优先，且是硬边界
+
+双方法检查 `<project_dir>/.ethunter_out/clean_code.txt` 是否存在。
+
+存在时：
+
+1. 逐行读取，去掉首尾空白；忽略空行和以 `#` 开头的注释行。
+2. 以 `/` 开头为绝对路径，否则拼接为 `<project_dir>/<行内容>`。
+3. 路径去重、规范化（分隔符统一为 `/`，去掉前导 `./`）。
+4. 逐项检查：
+   - 普通文件 → 加入 scope；
+   - 文件夹 → 递归展开为其中全部常规文件；
+   - 不存在 → 忽略，不报错。
+5. 生成两个文件：
+   - `tmp/scope_files.txt`：展开后的绝对文件路径，去重、排序；
+   - `tmp/scope_roots.txt`：原始文件/文件夹条目，去重、排序。
+6. scope 为空 → 报错 `empty_scope` 并结束。
+
+**硬边界规则：**
+
+- clean_code.txt 存在时，**不得分析或搜索列表以外的源文件**。
+- 所有入口、Bind、Dispatch、接口函数定义、宏定义的查找都只能在 scope 内进行；范围外一律视为“未找到”。
+- 后续 grep 只允许两种方式：
+
+```bash
+# 方式一：对精确文件清单分批 grep
+xargs -r -a "<out>/tmp/scope_files.txt" -d '\n' grep -I -n -F "<pattern>" 2>/dev/null
+
+# 方式二：只对原始文件/文件夹条目 grep
+xargs -r -a "<out>/tmp/scope_roots.txt" -d '\n' grep -I -rn -F "<pattern>" 2>/dev/null
+```
+
+- 禁止 `grep -rn <project_dir>` 或任何等价的全仓搜索。
+- 使用 `grep -I` 跳过二进制文件，避免大工程中无意义的慢搜索。
+- codegraph 返回的每个文件都必须按 `scope_files.txt` 过滤；范围外的结果直接丢弃，不读取、不记录、不追踪。
+
+### 5.2 clean_code.txt 不存在
+
+1. `.ethunter_out/.etignore` 存在：按 C/C++ 文件类型 find，再按 .etignore 规则排除，结果写入 scope_files.txt。
+2. `.etignore` 也不存在：直接 find C/C++ 文件，结果写入 scope_files.txt。
+
+C/C++ 扩展名集合：
+
+```text
+.c .h .cpp .cxx .cc .hpp .hxx .hh .inl .ipp
+```
+
+无 clean_code.txt 时，`scope_roots` 置为 `null`，该场景不使用根目录 grep，统一使用 `scope_files.txt`。
+
+### 5.3 macro.json
+
+- 路径：`<project_dir>/.ethunter_out/macro.json`。
+- 按需查阅，不预先全量读取。
+- 内容仅代表编译指令中 `-D` 等动态定义的宏，不是全部宏。
+- 遇到 `#ifdef` / `#if` 时：先在代码中追溯宏定义，再查 macro.json；两处都找不到，默认分析该分支（不排除）。
+
+### 5.4 codegraph
+
+- 双方法检查 `<project_dir>/.codegraph` 是否存在。
+- 存在时，代码搜索、定义定位、调用关系查询优先使用 `mcp__codegraph__codegraph_explore`。
+- 未安装 codegraph 或未配置 MCP → 使用 grep/find/Read/ast-grep，不中断分析。
+- codegraph 结果必须按 scope 过滤（见 5.1）。
+
+### 5.5 文件存在性检查
+
+关键文件/目录的存在性判断一律双方法交叉确认，禁止 `test -f` / `[ -f ]`：
+
+| 方法 | 操作 |
+|------|------|
+| 方法一 | `ls <path>` |
+| 方法二 | `Read <path>`（目录返回目录类错误也视为存在） |
+
+| 结果 | 处理 |
+|------|------|
+| 两次都确认存在 | 存在 |
+| 两次都确认不存在 | 不存在，按规则跳过/新建 |
+| 两次不一致 | 用第三种方法（如 `find`）确认，取多数 |
+| 两次都无法得出确定结论 | 立即停止，向用户报告，不得假设缺失后继续 |
+
+## 6. 阶段一：定位服务注册点
+
+### 6.1 精确搜索
+
+在 scope_files 内搜索 `"<service_name>"` 精确字符串（含引号，`grep -F`）。
+
+对每个命中点：
+
+1. 读取命中行前后足够上下文（建议至少 30 行，直到能看清完整初始化块）。
+2. 判断是否位于 `HdfDriverEntry` 类型的初始化中：
+
+```c
+struct HdfDriverEntry g_ArDriverEntry = {
+    .moduleVersion = 1,
+    .moduleName = "ar_service",
+    .Bind = HdfArDriverBind,
+    .Init = HdfArDriverInit,
+    .Release = HdfArDriverRelease,
+};
+```
+
+3. 只接受 `.moduleName` 字段与 service_name 完全相等（区分大小写）的初始化。
+4. 提取：
+   - 入口变量名（如 `g_ArDriverEntry`）；
+   - 定义文件绝对路径、行号；
+   - `.moduleName`、`.Bind`、`.Init`、`.Release` 的值；
+   - 结构体中其他与注册相关的字段（仅记录）。
+
+`.Bind` 缺失、为空、`NULL` 或 `nullptr` → 报错 `bind_not_found`，说明原因并结束。
+
+### 6.2 注册形式确认
+
+首选形式：
+
+```c
+HDF_INIT(g_ArDriverEntry);
+```
+
+- 在 scope 内搜索 `HDF_INIT(<入口变量>)`（允许空白差异，也检查 `HDF_INIT(&<入口变量>)`）。
+- 找到 → `registration.form = "HDF_INIT"`，记录文件、行号、证据。
+
+找不到时：
+
+1. 在 scope 内搜索入口变量的所有引用（word boundary）。
+2. 排除定义/初始化本身。
+3. 逐个阅读引用上下文，判断是否为其他注册形式（注册函数调用、注册宏、放入驱动表等）。
+4. 找到 → `registration.form = "other"`，记录文件、行号、证据。
+5. 仍找不到 → `registration.form = "unverified"`，记录“moduleName 已精确命中入口结构体，但未发现注册引用”。
+
+**只要 moduleName 精确命中的 HdfDriverEntry 存在，就视为找到服务；注册引用只作为证据，不作为硬性失败条件。**
+
+完全找不到 moduleName 精确命中 → 报错 `service_not_found`，报告：
+- 分析范围文件数；
+- 搜索过的模式；
+- 建议检查 service_name 拼写、clean_code.txt 是否包含入口文件。
+
+### 6.3 多命中处理
+
+1. 收集全部候选 `(入口变量, 文件, 行号)`，按文件+行号去重。
+2. 唯一候选 → 直接使用。
+3. 多个候选：
+   - 恰好一个带 `HDF_INIT` 或其他注册引用 → 选它；
+   - 多个都带注册引用 → 报错 `multiple_matches`，列出候选并结束；
+   - 都无注册引用 → 报错 `multiple_matches`，列出候选并结束。
+
+### 6.4 阶段产物
+
+写入 `tmp/entry_state.json` 的 `entry` 和 `scope` 字段，保存后进入 `analyze_bind`。
+
+## 7. 阶段二：分析 Bind
+
+### 7.1 定位 Bind 定义
+
+1. 在 scope 内搜索 Bind 函数定义；优先选择与入口结构体同一文件的定义。
+2. 若 `.Bind` 的值是宏或包装名，先在 scope 内解析到实际函数名，再定位定义。
+3. 校验存在完整函数体（不是仅声明）。
+3. 多个同名定义时：
+   - 签名匹配 `int32_t (*)(struct HdfDeviceObject *)` 的定义优先；
+   - 仍不唯一 → 报错 `bind_ambiguous`，列出候选并结束。
+4. 完全找不到函数体 → 报错 `bind_definition_not_found`，说明原因并结束。
+
+### 7.2 提取 Host 与 Dispatch
+
+完整阅读 Bind 函数体，识别：
+
+1. Host 结构体类型与实例：
+   - `new <HostType>`；
+   - `<HostType> *host = ...`；
+   - 栈/静态实例。
+   - 找不到 Host 类型时记录为 `null`，继续查找 Dispatch 赋值。
+
+2. Dispatch 赋值，接受以下形式：
+
+```c
+host->ioService.Dispatch = X;
+host->ioService = { .Dispatch = X, ... };
+host.ioService.Dispatch = X;
+host->Dispatch = X;              // Host 直接内嵌 IDeviceIoService 时
+```
+
+3. 若 Bind 中无 Dispatch：
+   - 追踪 Bind 直接调用的初始化函数（继续跟随其直接调用，环检测）；
+   - 在 scope 内搜索该 Host 类型的 Dispatch 赋值；
+   - 在 scope 内搜索 `IDeviceIoService` 相关的 Dispatch 赋值。
+4. 多个 Dispatch 函数全部保留，按函数定义去重，后续逐一追踪。
+5. 仍找不到 → 报错 `dispatch_not_found`，说明原因并结束。
+
+### 7.3 提取 stub、接口与实现类（可选项）
+
+1. 查找 Host 中名称包含 `stub`（不区分大小写）的成员赋值，或明显的 stub 类型成员赋值。
+2. 追踪赋值表达式：
+   - `GetOrNewObject(serviceImpl, IActivityInterface::GetDescriptor())`；
+   - `new XxxStub(...)`；
+   - 其他工厂函数/注册函数。
+3. 记录：
+   - stub 成员名；
+   - 接口类型（如 `IActivityInterface`）；
+   - 实现类（如 `ArService`）及创建位置；
+   - stub 类（如 `IActivityInterfaceStub`）。
+4. 定位 `OnRemoteRequest`：
+   - 由接口类型推导 stub 类，搜索 `<StubClass>::OnRemoteRequest` 定义；
+   - 或搜索实现类/接口相关类中的 `OnRemoteRequest`；
+   - 多个候选全部记录，后续追踪时逐一解析；找不到则留空，不中断。
+5. 这些信息是可选项，缺失不构成阶段失败。
+
+### 7.4 服务注册证据
+
+查找 `deviceObject->service = &host->ioService` 或等价赋值，记录文件、行号、证据。仅作为诊断信息，不作为硬性失败条件。
+
+### 7.5 阶段产物
+
+写入 `tmp/entry_state.json` 的 `bind` 字段，保存后进入 `trace_dispatch`。
+
+## 8. 阶段三：cmdId 分发追踪
+
+### 8.1 初始化工作队列
+
+1. 为 `entry_state.bind.dispatch_functions` 中每个 Dispatch 函数创建一个工作项。
+2. 初始值：
+   - `dispatcher`：Dispatch 函数限定名；
+   - `current_cmd_expr`：cmdId 参数名（通常 `cmdId`）；
+   - `current_cmd_value`：`null`；
+   - `outer_cmd_expr` / `outer_cmd_value`：`null`；
+   - `data_vars`：`data` 及由 `SbufToParcel` 等转换出的 parcel 指针；
+   - `parent_case_id`：`null`；
+   - `path`：`[dispatcher]`；
+   - `status`：`pending`。
+3. Dispatch 若直接调用 `stub->SendRequest(cmdId, ...)`，将对应 stub 的 `OnRemoteRequest` 作为新工作项入队，外层仍为空。
+4. 每个工作项按以下流程处理，处理完立即落盘。
+
+### 8.2 识别分发结构
+
+完整阅读分发函数体（含全部分支；`#ifdef` 结合 macro.json），识别：
+
+- `switch (cmdId)` 的 `case` / `case A ... B` / 多标签共享分支 / `default`；
+- `if / else if` 对 cmdId 或派生值的比较、范围判断、掩码判断；
+- 数组/映射/函数指针表：以 cmdId 或派生键索引；
+- 表项注册：初始化列表、`insert`、注册函数调用；
+- 宏生成的分发代码；
+- `SendRequest` / `OnRemoteRequest` / 已知 dispatcher 的转发；
+- 没有 cmdId 分支、直接调用 data 消费函数的情况。
+
+### 8.3 每个 cmdId 用例
+
+#### 8.3.1 外层归属
+
+```text
+effective_outer = 工作项.outer ?? 本用例
+```
+
+- 工作项外层为空 → 本用例成为外层，记录其宏/表达式和值。
+- 工作项外层已存在 → 保留外层；本用例只作为内层证据。
+- 因此 `Dispatch → SendRequest → OnRemoteRequest` 时，`OnRemoteRequest` 的 switch case 成为外层 cmd。
+- 嵌套分发的工作项继承 `effective_outer`，最终接口函数记录到该外层 cmd 下。
+
+#### 8.3.2 cmdId 数值解析
+
+| 形式 | 处理 |
+|------|------|
+| 整数字面量 | 直接取值 |
+| `#define` 宏链 | 在 scope 内递归解析，支持括号和简单运算符 |
+| 枚举常量 | 按显式值或隐式递增规则解析 |
+| `const` / `constexpr` 变量 | 读取初始化值 |
+| macro.json 中的 -D 宏 | 作为辅助来源 |
+| 算术/移位/位运算 | 常量可计算则求值 |
+| 范围 `A ... B` | 表达式原文，值记 `null` |
+| 掩码/组合表达式 | 表达式原文；能算出单一值则记值，否则 `null` |
+| 同名宏多定义/条件编译冲突 | 值记 `null`，写入 `unresolved` 并列出候选 |
+| 无法解析 | 值记 `null`，写入 `unresolved` |
+
+**具名 cmdId 即使值无法解析，也必须保留在最终输出中（值为 `null`）。**
+
+#### 8.3.3 分支分析
+
+对分支内语句做轻量 data 追踪：
+
+| 形式 | 是否 data 派生 |
+|------|----------------|
+| 直接参数 `data` | 是 |
+| `&data`、`*data`、cast | 是 |
+| `data.member`、`data->member` | 是 |
+| `data.ReadXxx()` 的返回值或输出参数 | 是 |
+| `SbufToParcel(data, &parcel)` 后的 `parcel` | 是 |
+| 上述变量的简单赋值/别名 | 是 |
+| 被非 data 值覆盖 | 否，移出派生集合 |
+| `reply` 及其派生值 | 否 |
+| 写入全局/成员后在另一个函数读取 | 记 `unresolved`（`data_deferred`），不臆造跨函数传播 |
+
+对分支内每个调用，按目标特征处理：
+
+| 目标特征 | 处理 |
+|----------|------|
+| 已知转发器（`SendRequest`、`OnRemoteRequest`、已知 dispatcher） | 入队为新工作项 |
+| 接收 cmdId 且函数体内有分发逻辑 | 入队为内层 dispatcher |
+| 接收 cmdId + data，且函数体内有分发 | 先作为分发函数入队，不直接记为接口 |
+| 接收 data/派生参数，且不构成分发 | 记为接口函数候选 |
+| 纯日志、断言、框架 sbuf/parcel 转换、纯校验辅助、无业务动作 | 忽略，写入 evidence |
+| 只接收 cmdId、不接收 data、也不分发 | 忽略 |
+| 只接收 reply、不读 data | 不记为接口函数 |
+
+- 一个分支有多个 data 消费目标 → 多条记录。
+- 一个分支只有内联 data 处理、没有调用目标 → 把分发函数自身记为接口函数，附 evidence。
+- `default` 分支只写入 `trace_state.default_cases`，不进入最终 JSON。
+- 无 cmdId 分支、无条件直接调用 data 消费函数 → 记为 `cmd_id_macro = "*"`、`cmd_id_value = null`，避免漏接口；evidence 说明“无条件直接处理”。
+
+### 8.4 调用目标解析（C/C++）
+
+C++ 间接调用、虚函数、函数指针、重载等解析细节可参考 taint-path-walker skill 的规则；本 skill 只追踪到 cmdId 处理位置，不要求完整污点传播路径。
+
+- 支持直接调用、成员调用、`this->` 调用、虚函数、函数指针、表项、注册回调。
+- 静态可确定 → 精确解析唯一目标。
+- 不可静态确定 → 在 scope 内枚举全部可识别候选；不设数量上限。
+- 仍无法确定 → 写入 `unresolved`，写明已尝试的搜索方式，不臆造。
+- `stub->SendRequest` 特殊处理：
+  1. 用阶段二记录的接口类型/实现类/stub 类定位具体 `Stub::OnRemoteRequest`；
+  2. 把 `SendRequest` 的 cmdId 参数映射为 `OnRemoteRequest` 的 `code` 参数；
+  3. 把 data/parcel 参数映射为 `OnRemoteRequest` 的 data 参数；
+  4. 外层 cmd 保持不变；
+  5. 找不到 `OnRemoteRequest` → 记 `unresolved`，不中断其它分支。
+- C++ 函数名一律使用定义处的作用域限定名（命名空间 + 类 + 方法，`::` 连接）。
+- 重载/同名函数用“定义文件 + 行号”区分，不只靠短名。
+- lambda 记为 `<lambda@绝对路径:行号>`。
+- 接口函数定义必须在 scope_files 内；范围外或找不到定义 → `unresolved`，不进入最终 JSON。
+- 虚函数/函数指针候选全部枚举；若候选集合中有多个定义，全部追踪，不因数量截断。
+
+### 8.5 嵌套分发与证据
+
+- 每个 case 记录：`level`（距初始 dispatcher 的层数，仅用于诊断）、`dispatch_site`、`case_expr`、`case_value`、`outer_cmd_expr`、`outer_cmd_value`、`parent_case_id`、`handlers`、`evidence`。
+- 嵌套分发产生的新工作项记录 `parent_case_id`，便于回溯。
+- 外层 cmd 在整条调用链上保持不变；一个外层 cmd 可达多个叶子接口 → 多条最终记录。
+
+### 8.6 终止条件
+
+不设深度上限、不设扇出上限。工作项只在以下情况结束：
+
+1. 分支内找到 data 消费的直接目标业务函数 → 记为接口函数，停止深入该业务函数内部；
+2. 分支内确实没有 data 消费目标 → 记录 evidence，结束该分支；
+3. 目标无法静态确定，或定义不在 scope 内 → 记入 `unresolved`；
+4. 同一 `(函数定义文件+行号, current_cmd_expr, current_cmd_value, outer_cmd_expr, outer_cmd_value)` 重复出现 → 记 `cycle`，停止该分支。
+
+- 环检测和 `visited` 去重只用于防止无限递归，不作为数量限制。
+- 若函数既做分发又直接处理 data：按分发函数继续追踪；只有不构成分发的 data 消费函数才作为接口函数。
+- 所有静态可确定的分发/转发目标全部枚举，不因分发阶段数或候选数量截断。
+
+### 8.7 工作项落盘
+
+每处理完一个工作项立即更新并保存 `tmp/trace_state.json`：
+
+- `queue`：工作项及 `pending/in_progress` 状态；
+- `cases`：已发现用例、层级、外层 cmd、分支证据、候选接口；
+- `handlers`：去重后的最终候选池；
+- `default_cases`：default 分支证据；
+- `unresolved`：`cmd_value` / `target` / `definition` / `data_deferred` / `ambiguous`；
+- `dispatch_cache`：分发点解析结果缓存；
+- `visited`：环检测键；
+- `counters`：队列剩余数、用例数、接口数、unresolved 数。
+
+幂等规则：
+
+- handlers 按 `(cmd_id_macro, cmd_id_value, interface_function, file)` 去重；
+- cases 按 `(dispatcher 定义文件+行号, dispatch_site 行号, case_expr, outer_cmd_expr, outer_cmd_value)` 去重；
+- 恢复时重做 `in_progress` 工作项，跳过已 `analyzed` 的用例；
+- 重新处理同一工作项不得产生重复记录。
+
+## 9. 最终 JSON 输出
+
+文件：`<project_dir>/.ethunter_out/hal-service-api-finder/<service_name>_api.json`
+
+扁平数组，严格四个字段：
+
+```json
+[
+  {
+    "cmd_id_macro": "CMD_ACTIVITY_INTERFACE_GET_VERSION",
+    "cmd_id_value": 0,
+    "interface_function": "ActivityInterfaceStubGetVersion",
+    "file": "/abs/path/activity_interface_stub.cpp"
+  }
+]
+```
+
+| 字段 | 类型 | 规则 |
+|------|------|------|
+| `cmd_id_macro` | string | 最外层具体 case 的宏名或表达式原文；范围/掩码/组合表达式照原样 |
+| `cmd_id_value` | integer 或 null | 单一可解析值；范围/掩码/组合/无法解析时为 null |
+| `interface_function` | string | 定义处的作用域限定名；lambda 用 `<lambda@绝对路径:行号>` |
+| `file` | string | 函数定义所在文件的绝对路径，必须在 scope_files 内 |
+
+输出规则：
+
+1. 同一 cmdId 对应多个接口函数 → 多条记录。
+2. 完全相同的四元组去重。
+3. 排序：`cmd_id_value` 升序（null 最后）→ `cmd_id_macro` → `interface_function` → `file`。
+4. `default` 分支不进入最终 JSON。
+5. 服务存在但未识别到接口 → 输出 `[]`，报告 0 个接口。
+6. 不添加任何额外字段。
+7. UTF-8 编码，JSON 缩进 2 空格。
+8. 先写 `tmp/<service_name>_api.json.tmp`，Read 回读校验通过后 `mv` 为最终文件，避免半成品。
+9. 最终文件必须存在，否则本次任务失败。
+
+## 10. 状态文件与断点恢复
+
+### 10.1 progress.json
+
+```json
+{
+  "phase": "locate_entry",
+  "service_name": "ar_service",
+  "project_dir": "/abs/path",
+  "scope": {
+    "file_count": 0,
+    "clean_code": true,
+    "scope_files": "tmp/scope_files.txt",
+    "scope_roots": "tmp/scope_roots.txt"
+  },
+  "locate_entry": {"status": "in_progress"},
+  "analyze_bind": {"status": "pending"},
+  "trace_dispatch": {"status": "pending"},
+  "output": {"status": "pending"},
+  "error": null
+}
+```
+
+- `phase` 取值：`locate_entry` / `analyze_bind` / `trace_dispatch` / `output` / `done`。
+- 阶段状态：`pending` / `in_progress` / `completed`。
+- 每次阶段切换立即保存。
+- 失败时不新增 `failed` 阶段：保留当前 `phase`，写入：
+
+```json
+"error": {
+  "code": "<错误码>",
+  "message": "<说明>",
+  "evidence": "<证据或已尝试的搜索方式>"
+}
+```
+
+- 下次运行从当前阶段重试，重试前清空 `error`。
+
+### 10.2 entry_state.json
+
+```json
+{
+  "service_name": "ar_service",
+  "scope": {
+    "file_count": 123,
+    "clean_code": true,
+    "scope_files": "tmp/scope_files.txt",
+    "scope_roots": "tmp/scope_roots.txt"
+  },
+  "entry": {
+    "variable": "g_ArDriverEntry",
+    "file": "/abs/path/...",
+    "line": 39,
+    "module_name": "ar_service",
+    "bind": "HdfArDriverBind",
+    "init": "HdfArDriverInit",
+    "release": "HdfArDriverRelease",
+    "registration": {
+      "form": "HDF_INIT",
+      "file": "/abs/path/...",
+      "line": 50,
+      "evidence": "HDF_INIT(g_ArDriverEntry)"
+    }
+  },
+  "bind": {
+    "status": "completed",
+    "function": "HdfArDriverBind",
+    "file": "/abs/path/...",
+    "line": 72,
+    "host_type": "HdfArHost",
+    "dispatch_functions": [
+      {
+        "name": "ArDriverDispatch",
+        "file": "/abs/path/...",
+        "line": 129,
+        "via": "hdfArHost->ioService.Dispatch"
+      }
+    ],
+    "stub": {
+      "member": "stub",
+      "interface_type": "IActivityInterface",
+      "impl_class": "ArService",
+      "impl_file": "/abs/path/...",
+      "stub_class": "IActivityInterfaceStub",
+      "on_remote_request": {
+        "name": "OHOS::HDI::ActivityRecognition::V1_0::ActivityInterfaceStub::OnRemoteRequest",
+        "file": "/abs/path/...",
+        "line": 160
+      },
+      "evidence": "hdfArHost->stub = ...GetOrNewObject(serviceImpl, IActivityInterface::GetDescriptor())"
+    },
+    "service_registration": {
+      "file": "/abs/path/...",
+      "line": 110,
+      "evidence": "deviceObject->service = &hdfArHost->ioService"
+    }
+  }
+}
+```
+
+- `registration.form`：`HDF_INIT` / `other` / `unverified`。
+- `bind.status`：`pending` / `in_progress` / `completed`。
+- `stub` 可以为 `null`。
+- 阶段二可重复执行（幂等）：中断后重跑并覆盖，不影响后续。
+
+### 10.3 trace_state.json
+
+```json
+{
+  "status": "in_progress",
+  "entry_dispatchers": [
+    {"name": "ArDriverDispatch", "file": "/abs/path/...", "line": 129}
+  ],
+  "queue": [
+    {
+      "id": 1,
+      "dispatcher": "ArDriverDispatch",
+      "dispatcher_file": "/abs/path/...",
+      "dispatcher_line": 129,
+      "current_cmd_expr": "cmdId",
+      "current_cmd_value": null,
+      "outer_cmd_expr": null,
+      "outer_cmd_value": null,
+      "data_vars": ["data", "dataParcel"],
+      "parent_case_id": null,
+      "path": ["ArDriverDispatch"],
+      "status": "pending"
+    }
+  ],
+  "cases": [
+    {
+      "id": 1,
+      "dispatcher": "OHOS::HDI::ActivityRecognition::V1_0::ActivityInterfaceStub::OnRemoteRequest",
+      "dispatcher_file": "/abs/path/...",
+      "dispatch_site": {"file": "/abs/path/...", "line": 163},
+      "level": 2,
+      "case_expr": "CMD_ACTIVITY_INTERFACE_GET_VERSION",
+      "case_value": 0,
+      "outer_cmd_expr": "CMD_ACTIVITY_INTERFACE_GET_VERSION",
+      "outer_cmd_value": 0,
+      "parent_case_id": null,
+      "status": "analyzed",
+      "handlers": [
+        {
+          "name": "ActivityInterfaceStubGetVersion",
+          "file": "/abs/path/...",
+          "line": 1200
+        }
+      ],
+      "evidence": "case CMD_ACTIVITY_INTERFACE_GET_VERSION: return ActivityInterfaceStubGetVersion(data, reply, option);"
+    }
+  ],
+  "handlers": [
+    {
+      "cmd_id_macro": "CMD_ACTIVITY_INTERFACE_GET_VERSION",
+      "cmd_id_value": 0,
+      "interface_function": "ActivityInterfaceStubGetVersion",
+      "file": "/abs/path/...",
+      "definition_line": 1200
+    }
+  ],
+  "default_cases": [],
+  "unresolved": [],
+  "dispatch_cache": [],
+  "visited": [],
+  "counters": {
+    "queue_remaining": 0,
+    "cases_total": 1,
+    "handlers_total": 1,
+    "unresolved_total": 0
+  }
+}
+```
+
+- `trace_state.status`：`in_progress` / `self_check` / `completed`。
+- `handlers` 是最终候选池；`definition_line` 仅用于调试，最终 JSON 不输出。
+- `default_cases` 不进入最终 JSON。
+- `unresolved` 条目包含 `kind`、`detail`、`tried`。
+- `visited` 条目包含函数定义信息和 cmd 上下文。
+- `dispatch_cache` 条目包含 `site`、`target`、`candidates`、`resolved`。
+- `counters` 用于恢复时的自洽检查。
+
+### 10.4 恢复流程
+
+1. 双方法检查 `progress.json`：
+   - 不存在 → 全新分析。
+   - 存在 → 继续。
+2. 校验 `project_dir` 和 `service_name` 与当前调用一致；不一致 → 报错 `state_conflict`，停止，不删除旧状态。
+3. `phase = done` → 双方法确认最终输出存在：
+   - 存在 → 报告完成，停止；
+   - 不存在且 trace_state 完整 → 从 trace_state 重新组装输出；
+   - 不存在且 trace_state 不完整 → 回到 `trace_dispatch` 继续分析。
+4. 按 phase 恢复：
+   - `locate_entry`：entry_state 已有匹配 entry → 跳到 `analyze_bind`；否则重跑阶段一。
+   - `analyze_bind`：bind 已完成且 `dispatch_functions` 非空 → 跳到 `trace_dispatch`；否则重跑阶段二。
+   - `trace_dispatch`：trace_state 存在 → 将 `in_progress` 工作项置回 `pending`，从第一个待处理项继续；跳过已 `analyzed` 的用例；queue 空 → 进入自检。trace_state 缺失 → 从 entry_state 重新初始化队列，重跑阶段三。
+   - `output`：跳过分析，直接从 trace_state 组装输出；成功后置 `done`。
+5. 加载后对照 `counters` 与实际数组长度；不一致以实际内容为准，不清空、不猜测性修复。
+6. 关键文件存在性一律双方法确认；结果无法判断 → 停止并报告。
+7. 状态文件采用“先写 `.tmp` 再 `mv`”的方式覆盖，避免中断产生半截 JSON。
+
+### 10.5 全新分析与旧输出
+
+- `progress.json` 不存在 → 视为全新分析；最终输出在完成时原子覆盖。
+- `progress.json` 存在但 phase 未完成 → 严格按恢复流程继续，不从头重跑。
+- 用户若要强制全新分析，删除 `progress.json` 与 `tmp/`；最终输出会在完成时覆盖。
+- 完成态 state 保留，不删除，支持“输出丢失后补做输出”和问题诊断。
+
+## 11. 错误处理
+
+### 11.1 全局错误
+
+| 错误码 | 触发条件 | 处理 |
+|--------|----------|------|
+| `usage_error` | 参数缺失、过多或为空 | 打印用法，结束 |
+| `invalid_project_dir` | project_dir 不存在或不是目录 | 报告，结束 |
+| `output_dir_failed` | 输出目录创建失败 | 报告，结束 |
+| `empty_scope` | 分析范围为空 | 报告，结束 |
+| `service_not_found` | 找不到 moduleName 精确匹配的 HdfDriverEntry | 报告范围文件数、搜索模式，结束 |
+| `multiple_matches` | 多个候选无法唯一确定 | 列出候选（变量、文件、行号），结束 |
+| `bind_not_found` | 入口结构体没有有效 `.Bind` | 报告，结束 |
+| `bind_definition_not_found` | Bind 函数体不在 scope 内 | 报告，结束 |
+| `bind_ambiguous` | 多个同名 Bind 定义无法区分 | 列出候选，结束 |
+| `dispatch_not_found` | 找不到 Dispatch 函数 | 报告，结束 |
+| `state_conflict` | progress 中的 project/service 与当前调用不一致 | 报告，结束，不删除旧状态 |
+| `state_io_error` | 状态文件读写失败 | 报告，结束 |
+| `output_write_failed` | 最终 JSON 写入或 mv 失败 | 报告，保留 phase=output，便于重试 |
+
+### 11.2 分支级问题（不终止整体分析）
+
+| 情况 | 处理 |
+|------|------|
+| cmdId 宏无法解析 | 值记 null，保留记录，写入 unresolved |
+| 调用目标无法静态确定 | 写入 unresolved，写明已尝试的搜索方式 |
+| 接口函数定义不在 scope 内 | 写入 unresolved，不进入最终 JSON |
+| data 被写入全局/成员并在别处读取 | 写入 unresolved（data_deferred），不臆造 |
+| 重载/同名定义歧义 | 记录全部候选，写 unresolved，不进入最终 JSON |
+| 环 | 记 cycle，停止该分支，其它分支继续 |
+| `default` 分支 | 只写 default_cases，不进入最终 JSON |
+
+## 12. 自检与完成标准
+
+自检开始前将 `trace_state.status` 置为 `self_check`；全部通过后置为 `completed`，再写最终 JSON。
+
+输出前逐项自检，全部通过才写最终 JSON：
+
+1. `queue` 为空，没有 `pending` / `in_progress` 工作项。
+2. 所有 `cases` 已 `analyzed`，或明确记录无目标/unresolved。
+3. 每个 `handlers` 条目都能在 scope_files 内定位到函数定义，且函数名为限定名。
+4. `default_cases` 没有混入 `handlers`。
+5. handlers 已按四元组去重，排序规则已执行。
+6. `unresolved` 已记录，数量与报告一致。
+7. 最终 JSON 恰好包含四个字段，无额外字段。
+8. 写临时文件后 Read 回读，核对数组长度、字段名、类型。
+9. `mv` 后双方法确认最终文件存在。
+10. `progress.json` 置 `phase = done`，所有阶段状态为 `completed`。
+
+完成报告包含：
+
+- 分析范围文件数；
+- service_name、入口变量、Bind 函数、Dispatch 函数数量；
+- cmdId 用例数；
+- 识别到的接口函数数量；
+- unresolved 数量；
+- 最终输出文件绝对路径。
+
+## 13. 权限、约束与风格
+
+### 13.1 权限申请
+
+| 工具 | 用途 |
+|------|------|
+| `Bash` | find/grep/xargs/ls/mkdir/mv，scope 内搜索与状态落盘 |
+| `Read` | 读取源码、macro.json、状态文件 |
+| `Write` | 写入 progress.json、entry_state.json、trace_state.json、最终 JSON |
+| `mcp__codegraph__codegraph_explore` | （可选）.codegraph 存在时优先的代码探索工具 |
+| `mcp__plugin_oh-my-claudecode_t__ast_grep_search` | （可选）AST 模式搜索 |
+
+codegraph 未安装/未配置 → 用常规工具代替，不中断分析。
+
+### 13.2 约束规则
+
+1. 全部由主 agent 完成，不调用 sub-agent。
+2. 质量优先；不设深度/扇出上限；所有分支追到接口函数或明确终止条件。
+3. clean_code.txt 是硬边界；grep 只用 scope_files/scope_roots；codegraph 结果按 scope 过滤；禁止全仓 grep。
+4. 只输出 cmdId 分发的直接目标业务函数，不展开业务函数内部实现。
+5. 接口函数必须能在 scope 内定位到定义；范围外记 unresolved，不输出。
+6. 不臆造：无法解析的宏/目标写明尝试过的搜索方式。
+7. 输出路径一律绝对路径；函数名带作用域限定；重载用文件+行号区分。
+8. 每个工作项处理完立即落盘；最终 JSON 最后一次性原子写出。
+9. 关键文件存在性双方法确认，禁止 `test -f`。
+10. 全中文提示词，同一概念用词前后一致。
+
+### 13.3 章节结构
+
+`SKILL.md` 按 api-finder 风格组织：
+
+1. 核心原则
+2. 使用方法与输出
+3. 初始化与分析范围
+4. 任务恢复机制
+5. 阶段一：定位服务注册点
+6. 阶段二：分析 Bind
+7. 阶段三：cmdId 分发追踪
+8. 输出与自检
+9. 权限申请
+10. 约束规则
+11. 抗理性化检查
+12. 使用示例
+
+### 13.4 frontmatter
+
+```yaml
+---
+name: hal-service-api-finder
+description: 当用户调用 /hal-service-api-finder <project_dir> <service_name>，或要求在 OpenHarmony/HDF HAL 层 C/C++ 代码中识别指定 service 对外提供的全部接口函数时使用。按 HdfDriverEntry.moduleName 精确定位服务注册点，分析 Bind/Dispatch/cmdId 分发，输出 cmdId 到接口函数的 JSON 映射。
+---
+```
+
+### 13.5 抗理性化检查
+
+| 想法 | 现实 |
+|------|------|
+| “分发层级太深，先记到这里” | 不设深度上限，追到接口函数或明确终止条件。 |
+| “候选太多，只取前 N 个” | 不设扇出上限，全部枚举。 |
+| “宏算不出来，跳过这个 case” | 保留记录，value 记 null。 |
+| “default 也算接口” | default 只进 default_cases，不进最终 JSON。 |
+| “这个函数像 helper，跳过” | 读函数体确认，不能凭名字判断。 |
+| “范围外可能有定义，去全仓 grep 一下” | 禁止；scope 是硬边界。 |
+| “短函数名就够了” | 必须带作用域限定名。 |
+| “状态最后一起存” | 每个工作项处理完立即落盘。 |
+| “有中间结果也从头跑一遍” | 先走恢复检查，按 phase 续跑。 |
+| “用 sub-agent 并行快一点” | 禁止；全部由主 agent 完成。 |
+| “只收 reply 也算接口” | 纯 reply、不读 data 的函数不算。 |
+| “业务函数内部还有处理，继续展开” | 只记直接目标，不展开业务实现。 |
+
+## 14. 静态走查验证
+
+按用户选择，不运行真实代码，交付前做静态走查：
+
+### 14.1 ar_service 样例走查
+
+使用 rr1.txt 中的样例：
+
+1. 搜索 `"ar_service"` → 命中 `g_ArDriverEntry` 的 `.moduleName`。
+2. 读取初始化 → `.Bind = HdfArDriverBind`，`.Init = HdfArDriverInit`，`.Release = HdfArDriverRelease`。
+3. 搜索 `HDF_INIT(g_ArDriverEntry)` → 命中。
+4. 阅读 Bind：
+   - Host 类型 `HdfArHost`；
+   - `hdfArHost->ioService.Dispatch = ArDriverDispatch`；
+   - `hdfArHost->stub = GetOrNewObject(serviceImpl, IActivityInterface::GetDescriptor())`；
+   - 实现类 `ArService`；
+   - `deviceObject->service = &hdfArHost->ioService`。
+5. 追踪 `ArDriverDispatch`：
+   - 无 switch，直接 `hdfArHost->stub->SendRequest(cmdId, *dataParcel, *replyParcel, option)`；
+   - 解析到 `ActivityInterfaceStub::OnRemoteRequest`；
+   - 外层仍为空，OnRemoteRequest 的 switch case 成为外层 cmd。
+6. 遍历 switch：
+   - 8 个具名 case；
+   - 每个 case 调用的 `ActivityInterfaceStub*` 函数记为接口函数；
+   - default 分支进 default_cases。
+7. 最终输出 8 条记录。示例只展示 GET_VERSION 的值 0；其余值按实际头文件解析。
+
+### 14.2 失败路径走查
+
+| 场景 | 预期 |
+|------|------|
+| service_name 拼写错误 | `service_not_found`，报告范围文件数和搜索模式，退出 |
+| 同 moduleName 多个带注册引用 | `multiple_matches`，列出候选，退出 |
+| 入口结构体无 `.Bind` | `bind_not_found`，退出 |
+| Bind 函数体在 scope 外 | `bind_definition_not_found`，退出 |
+| Bind 中无 Dispatch 且全 scope 找不到 | `dispatch_not_found`，退出 |
+| scope 为空 | `empty_scope`，退出 |
+| handler 定义在 scope 外 | 写 unresolved，不输出该接口，其它接口继续 |
+| cmdId 宏无法解析 | 值 null，保留记录 |
+| default 分支 | 只写 default_cases |
+| 分析中断后重跑 | 按 phase 恢复，不重复已 analyzed 用例 |
+
+### 14.3 恢复路径走查
+
+| 中断位置 | 预期恢复行为 |
+|----------|--------------|
+| 阶段一中断 | 重跑阶段一，entry 已存在则跳过 |
+| 阶段二中断 | 重跑阶段二（幂等） |
+| 阶段三中断 | 加载 trace_state，重做 in_progress 工作项，跳过 analyzed 用例 |
+| 输出阶段中断 | 直接重新组装输出，不重跑分析 |
+| phase=done 且输出丢失 | 从 trace_state 补做输出 |
+
+### 14.4 一致性检查
+
+1. 最终 JSON 严格四字段，文件名为 `<service_name>_api.json`。
+2. 所有 `file` 为绝对路径且在 scope_files 内。
+3. 所有 `interface_function` 为限定名。
+4. 全文没有全仓 grep 指令。
+5. 全文没有 sub-agent 指令。
+6. 状态字段名与恢复步骤一一对应。
+7. 术语前后一致。
+8. skill 目录只有 SKILL.md。
+
+## 15. 使用示例
+
+### 15.1 首次分析
+
+```text
+用户：/hal-service-api-finder /srv/ohos/drivers ar_service
+
+Agent：
+  [初始化] 分析范围：scope_files.txt 共 127 个文件；macro.json 存在，按需查阅。
+  [阶段一] 定位 moduleName="ar_service" → g_ArDriverEntry；
+           HDF_INIT(g_ArDriverEntry) 确认；
+           提取 Bind=HdfArDriverBind。
+  [阶段二] 分析 HdfArDriverBind：
+           Host=HdfArHost，Dispatch=ArDriverDispatch；
+           实现类=ArService，接口=IActivityInterface。
+  [阶段三] 追踪 ArDriverDispatch → SendRequest → ActivityInterfaceStub::OnRemoteRequest；
+           发现 8 个 cmdId 用例，8 个接口函数；
+           default 分支仅记录。
+  [自检] queue 空、8 条记录、无 unresolved。
+  [输出] ar_service_api.json 已生成。
+
+报告：
+  范围 127 个文件 | cmdId 用例 8 个 | 接口函数 8 个 | unresolved 0 个
+  输出：/srv/ohos/drivers/.ethunter_out/hal-service-api-finder/ar_service_api.json
+```
+
+### 15.2 断点续跑
+
+```text
+用户：/hal-service-api-finder /srv/ohos/drivers ar_service
+
+Agent：
+  [恢复检查] progress.json 存在，phase=trace_dispatch；
+             trace_state 中用例 1-3 已 analyzed，用例 4 为 in_progress。
+  [继续] 重做用例 4，继续用例 5-8。
+  [自检] 通过。
+  [输出] ar_service_api.json 已生成。
+```
+
+### 15.3 service 未找到
+
+```text
+用户：/hal-service-api-finder /srv/ohos/drivers ar_service_typo
+
+Agent：
+  [阶段一] 在 scope_files 的 127 个文件中精确搜索 "ar_service_typo"，无命中。
+  [退出] service_not_found：
+         未找到 moduleName="ar_service_typo" 的 HdfDriverEntry。
+         请检查 service_name 拼写，或确认 clean_code.txt 是否包含入口文件。
+```
+
+## 16. 仓库与交付
+
+- 仓库根目录：`/home/admin/cc/wksp/siakam_security_skills/hal_service_api_finder`。
+- 远端：`https://github.com/siakam43/hal_service_api_finder.git`，公开仓库。
+- 提交身份与 api-finder 仓库一致（`siakam43` 及对应邮箱）。
+- 使用已登录的 `gh` CLI 创建远端仓库并推送。
+- 初始提交内容：
+  - `rr1.txt`；
+  - `docs/superpowers/specs/2026-10-22-hal-service-api-finder-design.md`；
+  - `.gitignore`（忽略 `.omc/`）。
+- 实现完成后新增 `hal-service-api-finder/SKILL.md` 并提交。
+- 不提交任何凭据、token、密码或本地环境文件。

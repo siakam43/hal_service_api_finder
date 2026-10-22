@@ -1,0 +1,202 @@
+ # 原始需求
+参考skill路径：
+/home/admin/cc/wksp/siakam_security_skills/api_finder/api-finder
+/home/admin/cc/wksp/siakam_security_skills/taint_path_walker/taint-path-walker
+
+
+## 整体说明
+1 我需要开发一个单纯由markdown文档组成的skill，名字叫hal-service-api-finder。 在当前路径创建一个hal-service-api-finder文件夹，在文件夹内部创建SKILL.md文档。承载接下来的开发内容。
+2 核心功能: 根据hal层service服务的注册流程，识别指定serive对外提供的全部接口函数。
+3 SKILL风格和api-finder保持一致
+
+
+## 流程与架构
+### 工具输入
+1 SKILL使用方法：/hal-service-api-finder <project_dir> <service_name>
+2 确定源码分析范围：逻辑和api-finder一致，补充说明一下，clean_code.txt中不仅是文件路径，也可能是文件夹路径，如果是文件夹，代表里面全部文件都是在分析范围内。  同时注意本skill分析的范围包括c++代码。
+3 确认 macro.json 信息，逻辑和api-finder一致
+4 检查project_dir/.codegraph是否存在。 如果存在，在后续的代码分析中，优先使用mcp工具codegraph提供的工具进行代码分析。如果不存在，则使用默认的代码仓探索工具进行分析。
+5 初始化输出路径，没有文件夹则创建：project_dir/.ethunter_out/hal-service-api-finder
+
+### 任务恢复
+如果之前分析异常中断，根据已有的中间结果，resume分析。
+
+### HAL层服务的接口识别流程
+#### 一 寻找服务注册点
+serive的注册入口形式如下：
+'''c
+HDF_INIT(g_<service_name>DriverEntry); 
+'''
+根据服务名<service_name>定位服务注册点，优先按照提供的注册入口形式来寻找，如果在源码分析范围内找不到，再探索可能的其它服务注册形式。
+其中g_<service_name>DriverEntry是HdfDriverEntry类型的结构体，找到该结构体的初始化代码：
+'''c
+struct HdfDriverEntry g_xxxDriverEntry = { .moduleName = "...", .Bind = ..., .Init = ..., };
+'''
+大概率初始化了moduleName，Bind，Init等接口函数。
+
+样例代码：
+'''c
+struct HdfDriverEntry g_ArDriverEntry = {
+    .moduleVersion = 1,
+    .moduleName = "ar_service",
+    .Bind = HdfArDriverBind,
+    .Init = HdfArDriverInit,
+    .Release = HdfArDriverRelease,
+};
+
+#ifndef __cplusplus
+extern "C" {
+#endif
+HDF_INIT(g_ArDriverEntry);
+#ifndef __cplusplus
+}
+#endif
+'''
+
+本步骤输出： 服务Entry变量，Bind函数
+
+#### 二 分析Bind函数
+Bind函数的主要逻辑:
+1)初始化Host结构体：
+该Host结构体类型由HAL service来定义，因此不是固定的，但通常会以struct xxxHost来命名。
+在Bind函数中，会初始化Host结构体中两个重要成员：Dispatch函数和stub指针。
+2）初始化Dispatch
+dispatch函数会被链接到Host结构体的一个IDeviceIoService类型成员的Dispatch成员（一个函数指针）上。dispatch函数用于后续HAL service的消息分发处理。
+3）初始化stub （大概率存在，也可能在后续流程中实现）
+stub指针是Host结构体的一个成员指针（命名中可能带有stub，但不是一定），会指向本HAL service的具体实现类（Implementation）的一个实例（Instance）。（如下面例子中，ArService对应的impl类型为IActivityInterface）
+4）服务注册
+初始化完成后的Host结构体会被链接到HdfDeviceObject（Bind函数的参数），完成服务注册。
+
+样例代码：
+'''c
+static int32_t HdfArDriverBind(struct HdfDeviceObject *deviceObject)
+{
+    if (deviceObject == nullptr) {
+        return HDF_FAILURE;
+    }
+
+    struct HdfArHost *hdfArHost = new (std::nothrow) HdfArHost;
+    if (hdfArHost == nullptr) {
+        SH_HILOGE(AR_LOG_TAG, "failed to create create HdfArHost object");
+        return HDF_FAILURE;
+    }
+
+    hdfArHost->ioService.Dispatch = ArDriverDispatch;
+    hdfArHost->ioService.Open = nullptr;
+    hdfArHost->ioService.Release = nullptr;
+
+    ArService *impl = new (std::nothrow) ArService();
+    if (impl == nullptr) {
+        SH_HILOGE(AR_LOG_TAG, "failed to create ArService");
+        delete hdfArHost;
+        return HDF_FAILURE;
+    }
+
+    int32_t ret = impl->Init();
+    if (ret != HDF_SUCCESS) {
+        SH_HILOGE(AR_LOG_TAG, "service init failed, please check error code=%{public}d", ret);
+        delete hdfArHost;
+        return HDF_FAILURE;
+    }
+    sptr<IActivityInterface> serviceImpl = impl;
+    hdfArHost->stub = OHOS::HDI::ObjectCollector::GetInstance().GetOrNewObject(serviceImpl,
+        IActivityInterface::GetDescriptor());
+    if (hdfArHost->stub == nullptr) {
+        SH_HILOGE(AR_LOG_TAG, "failed to get stub object");
+        delete hdfArHost;
+        return HDF_FAILURE;
+    }
+
+    deviceObject->service = &hdfArHost->ioService;
+    SH_HILOGI(AR_LOG_TAG, "successful");
+    return HDF_SUCCESS;
+}
+'''
+本步骤输出： Dispatch函数，HAL service的具体实现类（stub指向的目标类型，该输出是可选项，也可能在后续步骤中找到）
+
+
+#### 三 消息数据追踪
+1) 追踪并寻找cmdId处理逻辑
+Dispatch函数的入参包括：`client`（设备）、`cmdId`（命令号）、`data`（客户端数据）、`reply`等。 我们需要重点追踪后续HAL service对cmdId和data的处理。
+从Dispatch函数，通过污点分析的方式，追踪cmdId和data的数据流向。 找到对cmdId的分发处理逻辑（处理逻辑可能不止一处，可能是多条并行分支，也可能是在一条分支中，分步解析。根据serivce实现的复杂程度而定），识别cmdId在不同取值的情况下，data会被传入哪些实际业务接口函数。(c++污点分析能力可以参考taint-path-walker skill，但本skill无需详细定义，这里不要求完整污点传播路径，只需要追踪到处理cmdId和data的位置即可)
+这里我们认为，前面的服务注册，Bind, Dispatch等都是系统框架处理流程，根据cmdId的取值，HAL service最终会调用不同的业务函数来处理客户端传来的data数据。而处理客户端数据的入口函数，我们定义为HAL service的接口函数，是我们skill的最终识别目标。
+
+需要注意，从Dispatch函数开始追踪cmdId和data时，可能会遇到通过stub指针转发数据的间接调用。通过stub->SendRequest或dispatcher->Dispatch将data和cmdId发送给HAL service的具体实现类，具体实现类通过OnRemoteRequest接收数据。
+此处需要依赖之前分析的HAL service的具体实现类，可以快速找到数据接收函数，避免分析断链。
+
+样例代码：
+'''c
+static int32_t ArDriverDispatch(struct HdfDeviceIoClient *client, int32_t cmdId, struct HdfSBuf *data,
+    struct HdfSBuf *reply)
+{
+    OHOS::MessageParcel *dataParcel = nullptr;
+    OHOS::MessageParcel *replyParcel = nullptr;
+    OHOS::MessageOption option;
+
+    if (SbufToParcel(data, &dataParcel) != HDF_SUCCESS) {
+        SH_HILOGE(AR_LOG_TAG, "invalid data sbuf object to dispatch");
+        return HDF_SUCCESS;
+    }
+    if (SbufToParcel(reply, &replyParcel) != HDF_SUCCESS) {
+        SH_HILOGE(AR_LOG_TAG, "invalid reply sbuf object to dispatch");
+        return HDF_ERR_INVALID_PARAM;
+    }
+
+    std::shared_lock lock(mutex_);
+    if (client == nullptr || client->device == nullptr || client->device->service == nullptr) {
+        HDF_LOGE("%{public}s: client or client.device or service is nullptr", __func__);
+        return HDF_FAILURE;
+    }
+    struct HdfArHost *hdfArHost = CONTAINER_OF(
+        client->device->service, struct HdfArHost, ioService);
+    if (hdfArHost == nullptr || hdfArHost->stub == nullptr) {
+        HDF_LOGE("%{public}s:invalid hdfArHost", __func__);
+        return HDF_ERR_INVALID_PARAM;
+    }
+
+    return hdfArHost->stub->SendRequest(cmdId, *dataParcel, *replyParcel, option);
+}
+
+int32_t OHOS::HDI::ActivityRecognition::V1_0::ActivityInterfaceStub::OnRemoteRequest(uint32_t code, MessageParcel& data, MessageParcel& reply, MessageOption& option)
+{
+    switch (code) {
+        case CMD_ACTIVITY_INTERFACE_GET_VERSION:
+            return ActivityInterfaceStubGetVersion(data, reply, option);
+        case CMD_ACTIVITY_INTERFACE_REGISTER_ACT_RECOGNITION_CALLBACK:
+            return ActivityInterfaceStubRegisterActRecognitionCallback(data, reply, option);
+        case CMD_ACTIVITY_INTERFACE_UNREGISTER_ACT_RECOGNITION_CALLBACK:
+            return ActivityInterfaceStubUnregisterActRecognitionCallback(data, reply, option);
+        case CMD_ACTIVITY_INTERFACE_GET_SUPPORT_ACTIVITY:
+            return ActivityInterfaceStubGetSupportActivity(data, reply, option);
+        case CMD_ACTIVITY_INTERFACE_GET_CURRENT_ACTIVITY:
+            return ActivityInterfaceStubGetCurrentActivity(data, reply, option);
+        case CMD_ACTIVITY_INTERFACE_ENABLE_ACT_RECOGNITION_EVENT:
+            return ActivityInterfaceStubEnableActRecognitionEvent(data, reply, option);
+        case CMD_ACTIVITY_INTERFACE_DISABLE_ACT_RECOGNITION_EVENT:
+            return ActivityInterfaceStubDisableActRecognitionEvent(data, reply, option);
+        case CMD_ACTIVITY_INTERFACE_FLUSH_ACTIVITY:
+            return ActivityInterfaceStubFlushActivity(data, reply, option);
+        default: {
+            HDF_LOGE("%{public}s: cmd %{public}d is not supported", __func__, code);
+            return IPCObjectStub::OnRemoteRequest(code, data, reply, option);
+        }
+    }
+}
+
+'''
+
+2）分HAL service接口
+分析cmdId不同取值时（在OnRemoteRequest中cmdId是参数code）, 会调用哪些具体业务函数来处理client数据data, 识别HAL service外部接口。
+
+本步骤输出： cmdId不同取值时，对应的外部接口函数。这也是skill的最终输出内容
+
+输出格式为JSON，包含cmdId的不同取值情况，记录每种情况下，cmdId对应的宏或宏表达式（例如CMD_ACTIVITY_INTERFACE_GET_VERSION），cmdId的实际取值(例如0), 对应的接口函数（例如ActivityInterfaceStubGetVersion），函数实现所在的源文件绝对路径。
+输出文件为project_dir/.ethunter_out/hal-service-api-finder/<service_name>_service_api.json
+
+
+## 要求
+1 需要使用代码仓探索的常用工具，SKILL应提前申请权限。 当project_dir/.codegraph存在时，还需要使用mcp工具codegraph，但如果环境中没有安装codegraph或没配置mcp，不要中断分析，使用常规工具即可。
+2 整个skill的提示词都用中文。 注意相同语义的用词前后保持一致。
+3 本skill包含长任务（多个cmdId待分析），提示词应通过规范方式防止任务遗忘。  分析的每一个步骤都要保存中间结果，方便调试，更方便断点续分析。
+4 全部任务由主agent完成，不需要sub-agent并行分析。 
+5 整个skill在处理c++函数名时，要注意作用域，函数名最好附带前面的作用域。
