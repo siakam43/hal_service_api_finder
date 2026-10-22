@@ -162,47 +162,47 @@ grep -I -H -n -E "<pattern>" "<file>"
 两次不一致 → 用 find 等第三种方法确认，取多数。
 两次都无法得出确定结论 → 立即停止并报告，不得假设缺失后继续。
 
-## 四、任务恢复机制
+## 四、中间结果记录
 
-状态文件路径：
-- `<out>/progress.json`
-- `<out>/tmp/entry_state.json`
-- `<out>/tmp/trace_state.json`
+本 skill 不做任务恢复，也不读取历史结果。每次执行开始时，把旧输出目录整体备份，再新建空目录，从零开始分析。中间结果只用于调试。
 
-以下 JSON 为字段形状示例，不要求彼此处于同一时刻。
+### 4.1 输出目录与启动清理
 
-### progress.json
+`<out>` = `<project_dir>/.ethunter_out/hal-service-api-finder`
+`<out>_bak` = `<project_dir>/.ethunter_out/hal-service-api-finder_bak`
 
-```json
-{
-  "phase": "locate_entry",
-  "service_name": "demo_service",
-  "project_dir": "/abs/path",
-  "scope": {
-    "file_count": 0,
-    "clean_code": true,
-    "scope_files": "tmp/scope_files.txt",
-    "scope_roots": "tmp/scope_roots.txt"
-  },
-  "locate_entry": {"status": "in_progress"},
-  "analyze_bind": {"status": "pending"},
-  "trace_dispatch": {"status": "pending"},
-  "output": {"status": "pending"},
-  "error": null
-}
+启动时依次执行：
+
+```bash
+if [ -d "<out>_bak" ]; then rm -rf "<out>_bak"; fi
+if [ -d "<out>" ]; then mv "<out>" "<out>_bak"; fi
+mkdir -p "<out>"
 ```
 
-- `phase` 取值：`locate_entry` / `analyze_bind` / `trace_dispatch` / `output` / `done`。
-- 阶段状态：`pending` / `in_progress` / `completed`。
-- 每次阶段切换立即保存。
-- 全新分析开始时，先创建初始 progress.json：写入 service_name/project_dir/scope，phase = locate_entry，locate_entry.status = in_progress，其余阶段 status = pending，error = null；写入方式为 .tmp + mv。
-- 失败时不新增 failed 阶段；保留当前 phase，写入 `error: {code, message, evidence}`，下次运行从当前阶段重试。
-- 重试前清空 error。
-- phase 是恢复的唯一权威；各阶段 `status` 仅作诊断，必须与 `phase` 同步更新。
-- `scope.file_count` 在 scope 生成后写入；恢复时与 `scope_files.txt` 的行数核对，不一致以实际文件清单为准并更新。
-- 只有 `trace_state.status == completed` 后，`phase` 才能设为 `output`；`output` 完成后才能设为 `done`。
+- 已有 `<out>_bak` → 先删除，只保留最近一次备份。
+- 已有 `<out>` → 整体 `mv` 为 `<out>_bak`，旧最终 JSON、阶段快照、scope 文件、error.json 一并保留在备份中。
+- 新目录创建后重新生成 `scope_files.txt` / `scope_roots.txt`。
+- 不读取旧结果，不判断 project/service 匹配，不做续跑。
+- 备份、mv 或 mkdir 失败 → 报 `output_dir_failed`，停止；此时若 `<out>` 无法创建，只在对话中报告，不写 error.json。
 
-### entry_state.json
+输出目录结构：
+
+```text
+<out>/
+  scope_files.txt
+  scope_roots.txt
+  01_entry.json
+  02_bind.json
+  03_trace.json
+  <service_name>_api.json
+  error.json          # 仅失败时
+```
+
+### 4.2 阶段快照
+
+中间快照直接写入 `<out>`，不要求原子写入；写入失败 → 报 `snapshot_write_failed`，停止。最终 `<service_name>_api.json` 仍采用临时文件 + `mv`。
+
+#### 01_entry.json
 
 ```json
 {
@@ -210,8 +210,8 @@ grep -I -H -n -E "<pattern>" "<file>"
   "scope": {
     "file_count": 123,
     "clean_code": true,
-    "scope_files": "tmp/scope_files.txt",
-    "scope_roots": "tmp/scope_roots.txt"
+    "scope_files": "scope_files.txt",
+    "scope_roots": "scope_roots.txt"
   },
   "entry": {
     "variable": "g_DemoDriverEntry",
@@ -227,9 +227,21 @@ grep -I -H -n -E "<pattern>" "<file>"
       "line": 50,
       "evidence": "HDF_INIT(g_DemoDriverEntry)"
     }
+  }
+}
+```
+
+#### 02_bind.json
+
+```json
+{
+  "service_name": "demo_service",
+  "entry": {
+    "variable": "g_DemoDriverEntry",
+    "file": "/abs/path/...",
+    "module_name": "demo_service"
   },
   "bind": {
-    "status": "completed",
     "function": "HdfDemoDriverBind",
     "file": "/abs/path/...",
     "line": 72,
@@ -264,136 +276,37 @@ grep -I -H -n -E "<pattern>" "<file>"
 }
 ```
 
-- `registration.form`：`HDF_INIT` / `other` / `unverified`。
-- `bind.status`：`pending` / `in_progress` / `completed`。
-- `stub` 可以为 `null`；`host_type` 可以为 `null`；`service_registration` 的 `file`/`line`/`evidence` 可以为 `null`；`stub.on_remote_request` 可以为 `null`。
-- 阶段二可重复执行（幂等）：中断后重跑并覆盖。
-- 恢复时校验 `entry_state.service_name` 与当前 `service_name` 一致；不一致视为身份不一致，报 `state_conflict` 并停止，不混用旧状态。
-
-### trace_state.json
+#### 03_trace.json
 
 ```json
 {
-  "status": "in_progress",
   "service_name": "demo_service",
-  "entry_dispatchers": [
-    {"name": "DemoDriverDispatch", "file": "/abs/path/...", "line": 129}
-  ],
-  "queue": [
-    {
-      "id": 1,
-      "dispatcher": "DemoDriverDispatch",
-      "dispatcher_file": "/abs/path/...",
-      "dispatcher_line": 129,
-      "current_cmd_expr": "cmdId",
-      "current_cmd_value": null,
-      "outer_cmd_expr": null,
-      "outer_cmd_value": null,
-      "data_vars": ["data"],
-      "data_derived": true,
-      "parent_case_id": null,
-      "path": ["DemoDriverDispatch"],
-      "status": "pending"
-    }
-  ],
-  "cases": [
-    {
-      "id": 1,
-      "dispatcher": "OHOS::HDI::Demo::V1_0::DemoInterfaceStub::OnRemoteRequest",
-      "dispatcher_file": "/abs/path/...",
-      "dispatcher_line": 160,
-      "dispatch_site": {"file": "/abs/path/...", "line": 163},
-      "level": 2,
-      "case_expr": "CMD_DEMO_INTERFACE_GET_VERSION",
-      "case_value": 0,
-      "outer_cmd_expr": "CMD_DEMO_INTERFACE_GET_VERSION",
-      "outer_cmd_value": 0,
-      "parent_case_id": null,
-      "status": "analyzed",
-      "handlers": [
-        {
-          "name": "DemoInterfaceStubGetVersion",
-          "file": "/abs/path/...",
-          "line": 1200
-        }
-      ],
-      "evidence": "case CMD_DEMO_INTERFACE_GET_VERSION: return DemoInterfaceStubGetVersion(data, reply, option);"
-    }
-  ],
-  "handlers": [
-    {
-      "cmd_id_macro": "CMD_DEMO_INTERFACE_GET_VERSION",
-      "cmd_id_value": 0,
-      "interface_function": "DemoInterfaceStubGetVersion",
-      "file": "/abs/path/...",
-      "definition_line": 1200
-    }
-  ],
+  "entry_dispatchers": [],
+  "cases": [],
+  "handlers": [],
   "default_cases": [],
-  "unresolved": [],
-  "dispatch_cache": [],
-  "visited": [],
-  "counters": {
-    "queue_remaining": 1,
-    "cases_total": 1,
-    "handlers_total": 1,
-    "unresolved_total": 0
-  }
+  "unresolved": []
 }
 ```
 
-- `trace_state.status`：`in_progress` / `self_check` / `completed`。
-- `handlers` 是最终候选池；`definition_line` 仅用于调试，最终 JSON 不输出。
-- `default_cases` 不进入最终 JSON。
-- `unresolved` 条目包含 `kind`、`detail`、`tried`。
-- `visited` 条目包含函数定义信息和 cmd 上下文。
-- `dispatch_cache` 条目包含 `site`、`target`、`candidates`、`resolved`。
-- `counters` 用于恢复时的自洽检查。
-- `queue` 只保存在处理中的工作项：处理前将该项置为 `in_progress`，处理完从 `queue` 移除；`queue_remaining` 必须等于 `queue` 的长度。`queue`/`visited` 条目包含 `data_vars` 与 `data_derived` 布尔字段，用于重建环检测键。
-- cmdId 用例状态为 `pending` / `analyzed`；`default` 分支单独记入 `default_cases`。
-- `trace_state.status` 含义：`in_progress` → 继续追踪；`self_check` → 完成或重做自检；`completed` → 可组装输出。
-- `trace_state 完整` 的定义：`status == completed` 且 `queue` 为空，且 `counters` 与实际数组长度一致。
-- 恢复时校验 `trace_state.service_name` 与当前 `service_name` 一致；不一致视为身份不一致，报 `state_conflict` 并停止。
+- 队列、`visited`、`dispatch_cache` 只存在于内存，阶段三结束后不写入文件。
+- 不写 `status`、`phase`、`counters`、`queue`、`visited`、`dispatch_cache`。
+- `cases`、`handlers`、`default_cases`、`unresolved` 的元素结构沿用原定义，但去掉 `status` 等恢复字段。
 
-### 状态文件问题分类
+#### error.json
 
-- 缺失：文件不存在 → 按恢复流程重建对应阶段。
-- 不可解析：文件存在但 JSON 解析失败 → 报 `state_io_error`，停止，不自动清空。
-- 身份不一致：JSON 可解析，但 service_name/project_dir 与当前调用不一致 → 报 `state_conflict`，停止，不混用旧状态。
-- 内容不完整：JSON 可解析、身份一致，但缺少该阶段必需字段 → 视为该阶段未完成，按恢复流程重跑对应阶段。
+仅在失败时写入：
 
-“有效 entry_state”：JSON 可解析、service_name 匹配、entry 存在且 module_name 匹配。
-“有效 trace_state”：JSON 可解析、service_name 匹配、status 为 in_progress/self_check/completed、queue/cases/handlers/default_cases/unresolved/dispatch_cache/visited 均为数组。
+```json
+{
+  "phase": "locate_entry|analyze_bind|trace_dispatch|output",
+  "code": "<错误码>",
+  "message": "<说明>",
+  "evidence": "<证据或已尝试的搜索方式>"
+}
+```
 
-### 恢复流程
-
-1. 双方法检查 progress.json：不存在 → 全新分析；存在 → 继续。
-2. 校验 project_dir/service_name 与当前调用一致；不一致 → 报 state_conflict；progress.json 不可解析 → 报 state_io_error；均停止，不删除旧状态。
-3. phase = done → 双方法确认最终输出存在：
-   - 存在 → 报告完成，停止；
-   - 不存在且 trace_state 完整（status == completed、queue 为空、counters 与实际数组一致）→ 从 trace_state 重新组装输出；
-   - 不存在且 trace_state 不完整 → 回到 trace_dispatch，按 trace_state.status 继续。
-4. 按 phase 恢复（先按“状态文件问题分类”处理当前阶段依赖的状态文件）：
-   - locate_entry：entry_state 有效且 entry 存在 → 跳到 analyze_bind；entry_state 缺失或内容不完整 → 重跑阶段一；不可解析 → state_io_error；身份不一致 → state_conflict。
-   - analyze_bind：entry_state 有效且 bind.status == completed 且 dispatch_functions 非空 → 跳到 trace_dispatch；entry_state 有效但 bind 未完成 → 重跑阶段二；entry_state 缺失或内容不完整（无 entry）→ 回到 locate_entry；不可解析 → state_io_error；身份不一致 → state_conflict。
-   - trace_dispatch：trace_state 有效 → 按 status 处理：
-       in_progress → 将 in_progress 工作项置回 pending，从第一个待处理项继续；重做该工作项的全部分支，已 analyzed 的 case 通过去重合并 handlers；queue 空 → 进入自检；
-       self_check → 完成或重做自检（见第八章）；
-       completed → 进入 output，并设置 progress.phase = output、output.status = in_progress；
-     trace_state 缺失或内容不完整 → 若 entry_state 有效且 bind.status == completed 且 dispatch_functions 非空，从 entry_state 重新初始化队列；否则回到 locate_entry；不可解析 → state_io_error；身份不一致 → state_conflict。
-   - output：trace_state 有效且 status == completed 才组装输出；status == self_check → 先完成自检；status == in_progress → 回到 trace_dispatch；trace_state 缺失或内容不完整 → 回到 trace_dispatch；不可解析 → state_io_error；身份不一致 → state_conflict。成功后置 done。
-5. 加载 trace_state 后重新计算 counters（queue_remaining = queue.length；cases_total = cases.length；handlers_total = handlers.length；unresolved_total = unresolved.length）；与实际不一致时以实际数组为准，并将重算后的 counters 写回 state；用重算结果判断 trace_state 完整。
-6. 关键文件存在性一律双方法确认；结果无法判断 → 停止并报告。
-7. 状态文件采用“先写 .tmp 再 mv”的方式覆盖，避免中断产生半截 JSON。
-8. 存在与当前 project_dir/service_name 匹配的 progress.json 时，按恢复流程继续，不重新生成 scope 或 scope 文件；只有全新分析才重建 scope，除非恢复步骤明确要求重建。若 progress.json 匹配但 scope_files.txt 缺失，重建 scope 并更新 progress.scope。无 clean_code.txt 时 scope_roots = null，旧的 scope_roots.txt 删除或忽略。
-
-### 全新分析与旧输出
-
-- progress.json 不存在 → 全新分析；开始时若同 service 的旧输出存在，先重命名为 `<service_name>_api.json.bak`，完成时再原子覆盖最终文件。
-- progress.json 存在但 phase 未完成 → 严格按恢复流程继续，不从头重跑。
-- 强制全新分析：删除 progress.json 与 tmp/。
-- 完成态 state 保留，不删除。
-- 同一 project_dir 同时只保留一个 service 的状态；检测到不同 service 的 progress.json → 报 `state_conflict` 并停止，提示用户归档或删除旧 `progress.json` 与 `tmp/` 后重跑；skill 不自动删除、不继续分析。
+`phase` 只是失败位置标签，不参与恢复。写入 error.json 后停止；不写最终 JSON。
 
 ## 五、阶段一：定位服务注册点
 
