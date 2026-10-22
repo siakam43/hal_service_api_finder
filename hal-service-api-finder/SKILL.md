@@ -322,7 +322,7 @@ error.json 只在新 `<out>` 已成功创建后写入；备份/mv/mkdir 失败�
 
 ## 五、阶段一：定位服务注册点
 
-阶段一只做一件事：在 scope 内找到 `.moduleName` 与 `<service_name>` 精确相等的 `HdfDriverEntry` 初始化器，确认注册形式，写出 `entry_state.json`。本阶段不分析 Bind 内部逻辑，不进入 Dispatch。
+阶段一只做一件事：在 scope 内找到 `.moduleName` 与 `<service_name>` 精确相等的 `HdfDriverEntry` 初始化器，确认注册形式，写出 `01_entry.json`。本阶段不分析 Bind 内部逻辑，不进入 Dispatch。
 
 ### 精确搜索
 
@@ -386,27 +386,26 @@ HDF_INIT(g_DemoDriverEntry);
 - 候选数为 1：直接使用该候选，无论其注册形式。
 - 候选数 ≥ 2：先对每个候选完成“注册形式确认”，再按以下规则决定：
   - 恰好一个候选有明确注册证据（`registration.form` 为 `HDF_INIT` 或 `other`）→ 使用该候选；
-  - 有两个及以上已注册候选，或没有任何已注册候选 → 报 `multiple_matches`，列出全部候选的 `variable`、`file`、`line`、`registration.form`、`registration.evidence`，写入 `progress.error` 并停止；不得任选、不得按文件顺序猜测。
+  - 有两个及以上已注册候选，或没有任何已注册候选 → 报 `multiple_matches`，列出全部候选的 `variable`、`file`、`line`、`registration.form`、`registration.evidence`，写 `error.json` 并停止；不得任选、不得按文件顺序猜测。
 - `unverified` 候选不计入“已注册”。
 
 ### 失败处理
 
-失败一律按第四章写入 `progress.error = {code, message, evidence}`，保留 `phase = locate_entry`，不写 `entry_state.json`，不进入阶段二，停止。
+失败一律写 `error.json = {phase: "locate_entry", code, message, evidence}`，不写 `01_entry.json`，不进入阶段二，停止。
 
 - `service_not_found`：没有任何合法候选。`message` 必须包含 scope 文件数（`scope_files.txt` 行数）和已搜索模式（至少 `"<service_name>"`），并建议检查 service_name 拼写与 clean_code.txt 覆盖范围；`evidence` 列出被拒命中及其原因；零命中时明确写“0 命中”。
-- `bind_not_found`：已选定唯一候选，但 `.Bind` 缺失、为空或为 `NULL` / `nullptr`。`message` 与 `evidence` 记录 `entry` 变量、文件、行号及 `.Bind` 原文/缺失情况。该检查在多命中消歧之后执行；失败时不写 `entry_state.json`，下次运行因无有效状态会重跑阶段一并重新校验。
+- `bind_not_found`：已选定唯一候选，但 `.Bind` 缺失、为空或为 `NULL` / `nullptr`。`message` 与 `evidence` 记录 `entry` 变量、文件、行号及 `.Bind` 原文/缺失情况。该检查在多命中消歧之后执行；失败时不写 `01_entry.json`，停止。
 
 ### 阶段产物
 
 定位成功后：
 
-1. 按第四章 `entry_state.json` 的字段形状写入：
+1. 组装 `01_entry.json`：
    - `service_name`：当前 `<service_name>`；
-   - `scope`：原样取 `progress.scope`（无 clean_code.txt 时 `scope_roots = null`）；
-   - `entry`：本阶段提取的 `variable`、`file`、`line`、`module_name`、`bind`、`init`、`release`、`registration`；
-   - 不写 `bind` 对象，由阶段二负责。
-2. 先写 `<out>/tmp/entry_state.json.tmp`，再 `mv` 覆盖 `<out>/tmp/entry_state.json`，避免产生半截 JSON。
-3. 立即更新 `progress.json`：`phase = analyze_bind`，`locate_entry.status = completed`，`analyze_bind.status = in_progress`，`error = null`；保存后进入 `## 六、阶段二：分析 Bind`。
+   - `scope`：`file_count`、`clean_code`、`scope_files`、`scope_roots`；
+   - `entry`：本阶段提取的 `variable`、`file`、`line`、`module_name`、`bind`、`init`、`release`、`registration`。
+2. 直接写 `<out>/01_entry.json`；写入失败 → 写 `error.json`（`phase = "locate_entry"`，`code = "snapshot_write_failed"`），停止。
+3. 进入 `## 六、阶段二：分析 Bind`。
 
 ## 六、阶段二：分析 Bind
 
