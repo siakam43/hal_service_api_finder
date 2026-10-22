@@ -922,10 +922,13 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 | `interface_function` | string | 定义处的作用域限定名；lambda 用 `<lambda@绝对路径:行号>` |
 | `file` | string | 函数定义所在文件的绝对路径，必须在 scope_files 内 |
 
+- `cmd_id_value` 直接取自 `trace_state.handlers`，不重新解析；3.4 判定可计算的掩码/组合保留整数，只有范围、不可计算或无法解析时为 null。
+- `cmd_id_macro` 也可以为 `"*"`（3.6 的无条件/内联处理）；此类记录按原样保留，`cmd_id_value` 为 null，正常参与去重与排序。仅 `default` 分支不输出。
+
 输出规则：
 
 1. 同一 cmdId 对应多个接口函数 → 多条记录。
-2. 完全相同的四元组去重。
+2. 完全相同的四元组去重。四元组去重是最终输出的归一化规则；重载若四字段完全相同，会在最终 JSON 中合并为一条。
 3. 排序：`cmd_id_value` 升序（null 最后）→ `cmd_id_macro` → `interface_function` → `file`。
 4. `default` 分支不进入最终 JSON。
 5. 服务存在但未识别到接口 → 输出 `[]`，报告 0 个接口。
@@ -944,7 +947,7 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 
 ### 8.2 自检与状态切换
 
-自检开始前将 `trace_state.status` 置为 `self_check`（阶段三收尾应已置为该值；从恢复流程进入时先确认，不一致则纠正），先以 `<out>/tmp/trace_state.json.tmp` + `mv` 原子保存，再执行以下清单：
+自检开始前将 `trace_state.status` 置为 `self_check`（阶段三收尾应已置为该值；从恢复流程进入时先确认，按以下映射纠正：`in_progress` → 回到 `trace_dispatch` 继续；`completed` → 跳过自检，直接进入输出组装；`self_check` → 执行清单），先以 `<out>/tmp/trace_state.json.tmp` + `mv` 原子保存，再执行以下清单：
 
 1. `queue` 为空，没有 `pending` / `in_progress` 工作项。
 2. 所有 `cases` 已 `analyzed`，或明确记录无目标/unresolved。
@@ -960,9 +963,11 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 执行说明：
 
 - 第 1-4、6 项检查 `trace_state` 当前内容；第 5、7 项针对 8.1 组装后的最终数组核对。
+- 第 2 项执行时要求所有 `cases[i].status == "analyzed"`；3.9 已保证任一终止条件都会置 analyzed，出现非 analyzed 即自检失败。
+- 第 4 项执行时检查没有任何 handler 的 `cmd_id_macro == "default"`，且不存在仅由 `default_cases` 站点支撑的 handler；否则自检失败。
 - 第 3 项中 lambda 的 `interface_function` 以 `<lambda@绝对路径:行号>` 形式为合规；其余函数必须是定义处作用域限定名。每个条目都要按 `file` 与定义位置 Read 确认完整函数体，且 `file` 必须在 `scope_files.txt` 内。
 - 第 6 项的 unresolved 数量以 `trace_state.unresolved` 长度为准，并与完成报告一致。
-- 第 8 项回读后核对：数组长度等于去重后的记录数；每条键集合恰为四字段；`cmd_id_macro` / `interface_function` / `file` 为字符串，`cmd_id_value` 为整数或 null。
+- 第 8 项回读后核对：数组长度等于去重后的记录数；每条键集合恰为四字段；`cmd_id_macro` / `interface_function` / `file` 为字符串，`cmd_id_value` 为整数或 null。必须读到文件末尾；若一次 Read 被截断，分页读取直到 EOF；截断视为回读失败。
 - 第 9 项的双方法按第三章“文件存在性检查”执行（`ls` + `Read`），禁止 `test -f` / `[ -f ]`。
 
 执行顺序与状态切换：
@@ -978,7 +983,7 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 
 失败处理：
 
-- 清单第 1-7 项任一失败 → 按第四章写 `progress.error = {code, message, evidence}`，`trace_state.status` 保持 `self_check`，`progress.phase` 保持 `trace_dispatch`（若已进入 `output` 则保持 `output`），停止；不得写最终 JSON。
+- 清单第 1-7 项任一失败 → 按第四章写 `progress.error`（`code = "self_check_failed"`，message/evidence 记录失败项编号与证据），`trace_state.status` 保持 `self_check`，`progress.phase` 保持 `trace_dispatch`（若已进入 `output` 则保持 `output`），停止；不得写最终 JSON。
 - 清单第 8-9 项（写临时文件、回读校验、`mv`、最终文件存在性确认）任一失败 → 写 `progress.error`（`code = "output_write_failed"`，evidence 记录临时/最终路径与失败动作），保持 `phase = output` 以便重试，停止；不得把 `phase` 置为 `done`。
 - 重试 `output_write_failed` 时从 `trace_state.handlers` 重新组装（结果幂等），覆盖临时文件后重新执行回读、`mv` 与存在性确认。
 - 最终文件必须存在；无法确认存在即按 `output_write_failed` 处理，本次任务失败。
@@ -989,7 +994,7 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 
 - 分析范围文件数；
 - service_name、入口变量、Bind 函数、Dispatch 函数数量；
-- cmdId 用例数；
+- cmdId 用例数（取 `trace_state.cases.length`，不含 `default_cases`）；
 - 接口函数数量；
 - unresolved 数量；
 - 最终输出文件绝对路径。

@@ -930,6 +930,11 @@ Add output rules:
 8. 先写 `tmp/<service_name>_api.json.tmp`，Read 回读校验通过后 `mv` 为最终文件。
 9. 最终文件必须存在，否则本次任务失败。
 
+Add notes:
+- `cmd_id_value` comes from `trace_state.handlers` without re-evaluation; computable masks/combinations keep integers, only ranges/uncomputable/unparseable are null.
+- `cmd_id_macro` may be `"*"` for unconditional/inline handling and is output normally; only `default` is excluded.
+- Four-tuple dedupe is the final normalization; overloads identical in all four fields collapse.
+
 - [ ] **Step 2: Write the self-check checklist and completion report**
 
 Include exactly these self-check items:
@@ -944,6 +949,11 @@ Include exactly these self-check items:
 8. 写临时文件后 Read 回读，核对数组长度、字段名、类型。
 9. `mv` 后双方法确认最终文件存在。
 10. 写最终 JSON 前将 `progress.phase` 置为 `output`；写成功后置为 `done`，所有阶段状态为 `completed`。
+
+Add operational notes:
+- Item 2 requires every `cases[i].status == "analyzed"`; item 4 requires no `default` handler and no handler backed solely by `default_cases`.
+- Read the final JSON to EOF; a truncated read is a failure.
+- Self-check failure uses `code = "self_check_failed"`; cmdId case count is `cases.length` excluding `default_cases`.
 
 Include the completion report fields:
 

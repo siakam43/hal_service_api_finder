@@ -515,6 +515,10 @@ C++ 间接调用、虚函数、函数指针、重载等解析细节可参考 tai
 | `interface_function` | string | 定义处的作用域限定名；lambda 用 `<lambda@绝对路径:行号>` |
 | `file` | string | 函数定义所在文件的绝对路径，必须在 scope_files 内 |
 
+- `cmd_id_value` 直接取自 `trace_state.handlers`，不重新解析；3.4 判定可计算的掩码/组合保留整数，只有范围、不可计算或无法解析时为 null。
+- `cmd_id_macro` 也可以为 `"*"`（3.6 的无条件/内联处理），正常输出；仅 `default` 分支不输出。
+- 四元组去重是最终归一化规则；重载若四字段完全相同则合并为一条。
+
 输出规则：
 
 1. 同一 cmdId 对应多个接口函数 → 多条记录。
@@ -803,6 +807,10 @@ C++ 间接调用、虚函数、函数指针、重载等解析细节可参考 tai
 ## 12. 自检与完成标准
 
 自检开始前将 `trace_state.status` 置为 `self_check`；全部通过后置为 `completed`，并将 `progress.phase` 置为 `output`；最终 JSON 写成功后将 `progress.phase` 置为 `done`。
+
+- 自检项 2 要求所有 `cases` 为 `analyzed`；自检项 4 要求没有任何 `default` handler，且不存在仅由 `default_cases` 支撑的 handler。
+- 回读最终 JSON 必须读到 EOF；截断视为回读失败。
+- 自检失败写 `code = "self_check_failed"`；cmdId 用例数取 `trace_state.cases.length`（不含 `default_cases`）。
 
 输出前逐项自检，全部通过才写最终 JSON：
 
