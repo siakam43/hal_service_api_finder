@@ -857,7 +857,7 @@ Replace `trace_state.cases.length` with `03_trace.json` 的 `cases` 长度，and
 - [ ] **Step 6: Verify Task 6**
 
 ```bash
-sed -n '/^## 八、/,/^## 九、/p' hal-service-api-finder/SKILL.md | grep -n 'trace_state\.\|progress\.\|status 保持\|phase = ' || echo 'no old state references in section 8'
+sed -n '/^## 八、/,/^## 九、/p' hal-service-api-finder/SKILL.md | grep -n 'trace_state\.\|progress\.\|status 保持\|counters\|queue_remaining' || echo 'no old state references in section 8'
 sed -n '/^## 八、/,/^## 九、/p' hal-service-api-finder/SKILL.md | grep -n 'tmp/' || echo 'no tmp paths in section 8'
 grep -n '03_trace.json' hal-service-api-finder/SKILL.md
 ```
