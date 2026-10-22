@@ -509,6 +509,7 @@ Include this exact JSON block under a `### trace_state.json` heading:
       "id": 1,
       "dispatcher": "OHOS::HDI::ActivityRecognition::V1_0::ActivityInterfaceStub::OnRemoteRequest",
       "dispatcher_file": "/abs/path/...",
+      "dispatcher_line": 160,
       "dispatch_site": {"file": "/abs/path/...", "line": 163},
       "level": 2,
       "case_expr": "CMD_ACTIVITY_INTERFACE_GET_VERSION",
@@ -555,7 +556,7 @@ Add these rules:
 - `handlers` 是最终候选池；`definition_line` 仅用于调试，最终 JSON 不输出。
 - `default_cases` 不进入最终 JSON。
 - `unresolved` 条目包含 `kind`、`detail`、`tried`。
-- `visited` 条目包含函数定义信息和 cmd 上下文，并带 `data_derived` 布尔字段。
+- `visited` 条目包含函数定义信息和 cmd 上下文，并带 `data_vars`、`data_derived` 字段，用于重建环检测键。
 - `dispatch_cache` 条目包含 `site`、`target`、`candidates`、`resolved`。
 - `counters` 用于恢复时的自洽检查。
 - `queue` 只保存在处理中的工作项：处理前将该项置为 `in_progress`，处理完从 `queue` 移除；`queue_remaining` 必须等于 `queue` 的长度。
@@ -608,7 +609,7 @@ Add a `### 全新分析与旧输出` subsection with:
 - progress.json 存在但 phase 未完成 → 严格按恢复流程继续，不从头重跑。
 - 强制全新分析：删除 progress.json 与 tmp/。
 - 完成态 state 保留，不删除。
-- 同一 project_dir 同时只保留一个 service 的状态；分析另一个 service 前，先归档或删除旧 progress.json 与 tmp/。
+- 同一 project_dir 同时只保留一个 service 的状态；检测到不同 service 的 progress.json → 报 `state_conflict` 并停止，提示用户归档或删除旧 `progress.json` 与 `tmp/` 后重跑；skill 不自动删除、不继续分析。
 
 - [ ] **Step 5: Verify state fields and JSON blocks**
 
@@ -785,7 +786,9 @@ Include exactly:
 
 ```text
 外层归属：
-effective_outer = 工作项.outer ?? 本用例
+effective_outer = 当前分支已确定外层 ?? 工作项.outer ?? 本用例
+
+- 内层 case 继承其外层 case 的 effective_outer，不得用内层 case 覆盖外层。
 
 - 工作项外层为空 → 本用例成为外层，记录宏/表达式和值。
 - 外层已存在 → 保留外层，本用例只作内层证据。
@@ -1040,7 +1043,7 @@ Under a `### 全局错误码` heading, include exactly:
 | `bind_definition_not_found` | Bind 函数体不在 scope 内 | 报告，结束 |
 | `bind_ambiguous` | 多个同名 Bind 定义无法区分 | 列出候选，结束 |
 | `dispatch_not_found` | 找不到 Dispatch 函数 | 报告，结束 |
-| `state_conflict` | progress/entry_state/trace_state 的 project_dir/service_name 与当前调用不一致 | 报告，结束，不删除旧状态 |
+| `state_conflict` | progress.json 的 project_dir/service_name 或其他状态文件的 service_name 与当前调用不一致 | 报告，结束，不删除旧状态 |
 | `state_io_error` | 状态文件读写失败或 JSON 不可解析 | 报告，结束 |
 | `output_write_failed` | 临时文件写入、回读校验、mv 或最终文件存在性确认失败 | 报告，保留 phase=output，便于重试 |
 | `self_check_failed` | 自检清单第 1-7 项失败 | 报告，`trace_state.status` 保持 `self_check`，`phase` 保持不变，结束，不写最终 JSON |

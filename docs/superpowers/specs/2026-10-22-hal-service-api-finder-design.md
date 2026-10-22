@@ -49,7 +49,7 @@ HdfDriverEntry.moduleName 精确定位
 - 两个参数均必填且不能为空；缺失任意一个，打印用法并结束。
 - `project_dir` 必须是已存在的目录；相对路径转换为绝对路径后使用。
 - `service_name` 是 `HdfDriverEntry.moduleName` 的精确字符串，区分大小写，不做模糊匹配、不做大小写归一化。
-- `service_name` 不得包含 `/`、`\`、换行、NUL 或引号；包含这些字符 → 报错 `usage_error` 并结束。
+- `service_name` 仅允许字母、数字、下划线、点和连字符；不得包含 `/`、`\`、空白、换行、NUL、引号或 shell 元字符；不满足 → 报错 `usage_error` 并结束。
 - 参数多于两个时，打印用法并结束。
 
 ### 3.2 输出位置
@@ -367,7 +367,9 @@ host->Dispatch = X;              // Host 直接内嵌 IDeviceIoService 时
 #### 8.3.1 外层归属
 
 ```text
-effective_outer = 工作项.outer ?? 本用例
+effective_outer = 当前分支已确定外层 ?? 工作项.outer ?? 本用例
+
+- 内层 case 继承其外层 case 的 effective_outer，不得用内层 case 覆盖外层。
 ```
 
 - 工作项外层为空 → 本用例成为外层，记录其宏/表达式和值。
@@ -479,7 +481,7 @@ C++ 间接调用、虚函数、函数指针、重载等解析细节可参考 tai
 - `cases`：已发现用例、层级、外层 cmd、分支证据、候选接口；
 - `handlers`：去重后的最终候选池；
 - `default_cases`：default 分支证据；
-- `unresolved`：`cmd_value` / `target` / `definition` / `data_deferred` / `ambiguous`；
+- `unresolved`：`cmd_value` / `target` / `definition` / `data_deferred` / `cycle`；
 - `dispatch_cache`：分发点解析结果缓存；
 - `visited`：环检测键；
 - `counters`：队列剩余数、用例数、接口数、unresolved 数。
@@ -679,6 +681,7 @@ C++ 间接调用、虚函数、函数指针、重载等解析细节可参考 tai
       "id": 1,
       "dispatcher": "OHOS::HDI::ActivityRecognition::V1_0::ActivityInterfaceStub::OnRemoteRequest",
       "dispatcher_file": "/abs/path/...",
+      "dispatcher_line": 160,
       "dispatch_site": {"file": "/abs/path/...", "line": 163},
       "level": 2,
       "case_expr": "CMD_ACTIVITY_INTERFACE_GET_VERSION",
@@ -723,7 +726,7 @@ C++ 间接调用、虚函数、函数指针、重载等解析细节可参考 tai
 - `handlers` 是最终候选池；`definition_line` 仅用于调试，最终 JSON 不输出。
 - `default_cases` 不进入最终 JSON。
 - `unresolved` 条目包含 `kind`、`detail`、`tried`。
-- `visited` 条目包含函数定义信息和 cmd 上下文，并带 `data_derived` 布尔字段。
+- `visited` 条目包含函数定义信息和 cmd 上下文，并带 `data_vars`、`data_derived` 字段，用于重建环检测键。
 - `dispatch_cache` 条目包含 `site`、`target`、`candidates`、`resolved`。
 - `counters` 用于恢复时的自洽检查。
 - `queue` 只保存在处理中的工作项：处理前将该项置为 `in_progress`，处理完从 `queue` 移除；`queue_remaining` 必须等于 `queue` 的长度。
@@ -770,7 +773,7 @@ C++ 间接调用、虚函数、函数指针、重载等解析细节可参考 tai
 - progress.json 存在但 phase 未完成 → 严格按恢复流程继续，不从头重跑。
 - 强制全新分析：删除 progress.json 与 tmp/。
 - 完成态 state 保留，不删除。
-- 同一 project_dir 同时只保留一个 service 的状态；分析另一个 service 前，先归档或删除旧 progress.json 与 tmp/。
+- 同一 project_dir 同时只保留一个 service 的状态；检测到不同 service 的 progress.json → 报 `state_conflict` 并停止，提示用户归档或删除旧 `progress.json` 与 `tmp/` 后重跑；skill 不自动删除、不继续分析。
 
 ## 11. 错误处理
 
@@ -788,7 +791,7 @@ C++ 间接调用、虚函数、函数指针、重载等解析细节可参考 tai
 | `bind_definition_not_found` | Bind 函数体不在 scope 内 | 报告，结束 |
 | `bind_ambiguous` | 多个同名 Bind 定义无法区分 | 列出候选，结束 |
 | `dispatch_not_found` | 找不到 Dispatch 函数 | 报告，结束 |
-| `state_conflict` | progress/entry_state/trace_state 的 project_dir/service_name 与当前调用不一致 | 报告，结束，不删除旧状态 |
+| `state_conflict` | progress.json 的 project_dir/service_name 或其他状态文件的 service_name 与当前调用不一致 | 报告，结束，不删除旧状态 |
 | `state_io_error` | 状态文件读写失败或 JSON 不可解析 | 报告，结束 |
 | `output_write_failed` | 临时文件写入、回读校验、mv 或最终文件存在性确认失败 | 报告，保留 phase=output，便于重试 |
 | `self_check_failed` | 自检清单第 1-7 项失败 | 报告，`trace_state.status` 保持 `self_check`，`phase` 保持不变，结束，不写最终 JSON |

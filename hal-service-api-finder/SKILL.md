@@ -56,7 +56,7 @@ description: 当用户调用 /hal-service-api-finder <project_dir> <service_name
 2. 将 `<project_dir>` 解析为绝对路径：相对路径按当前工作目录展开并规范化，后续一律使用绝对路径。
 3. `<project_dir>` 不存在或不是目录 → 报错 `invalid_project_dir` 并结束，不创建任何输出。
 4. `<service_name>` 仅去除首尾空白，保持大小写与其余字符不变，用于后续精确匹配。
-- `service_name` 不得包含 `/`、`\`、换行、NUL 或引号；包含这些字符 → 报错 `usage_error` 并结束。
+- `service_name` 仅允许字母、数字、下划线、点和连字符；不得包含 `/`、`\`、空白、换行、NUL、引号或 shell 元字符；不满足 → 报错 `usage_error` 并结束。
 - 搜索时按字面量处理并正确加引号（优先 `grep -F`）。
 
 ### 输出目录初始化
@@ -127,6 +127,7 @@ xargs -r -a "<out>/tmp/scope_roots.txt" -d '\n' grep -I -rn -F "<pattern>"
 
 - 需要正则/词边界时，把 `-F` 换成 `-E` 并追加 `-w` 等参数，但文件参数仍必须来自上述清单。
 - 禁止 `grep -rn <project_dir>`、`rg <project_dir>`、`find <project_dir> -exec grep` 等任何等价的全仓搜索。
+- 不得用 `2>/dev/null` 隐藏错误；权限/读取错误必须如实报告。
 - `xargs`/`grep` 退出码 1 或 123 表示“没有匹配”，不是工具失败；权限/读取错误应如实报告。
 - codegraph 返回的每个文件都必须按 `scope_files.txt` 过滤；范围外的搜索命中直接丢弃，不读取、不记录；若分析中已明确知道某个目标定义在范围外，记入 `unresolved`。
 
@@ -296,6 +297,7 @@ xargs -r -a "<out>/tmp/scope_roots.txt" -d '\n' grep -I -rn -F "<pattern>"
       "id": 1,
       "dispatcher": "OHOS::HDI::ActivityRecognition::V1_0::ActivityInterfaceStub::OnRemoteRequest",
       "dispatcher_file": "/abs/path/...",
+      "dispatcher_line": 160,
       "dispatch_site": {"file": "/abs/path/...", "line": 163},
       "level": 2,
       "case_expr": "CMD_ACTIVITY_INTERFACE_GET_VERSION",
@@ -343,7 +345,7 @@ xargs -r -a "<out>/tmp/scope_roots.txt" -d '\n' grep -I -rn -F "<pattern>"
 - `visited` 条目包含函数定义信息和 cmd 上下文。
 - `dispatch_cache` 条目包含 `site`、`target`、`candidates`、`resolved`。
 - `counters` 用于恢复时的自洽检查。
-- `queue` 只保存在处理中的工作项：处理前将该项置为 `in_progress`，处理完从 `queue` 移除；`queue_remaining` 必须等于 `queue` 的长度。`queue`/`visited` 条目包含 `data_derived` 布尔字段。
+- `queue` 只保存在处理中的工作项：处理前将该项置为 `in_progress`，处理完从 `queue` 移除；`queue_remaining` 必须等于 `queue` 的长度。`queue`/`visited` 条目包含 `data_vars` 与 `data_derived` 布尔字段，用于重建环检测键。
 - cmdId 用例状态为 `pending` / `analyzed`；`default` 分支单独记入 `default_cases`。
 - `trace_state.status` 含义：`in_progress` → 继续追踪；`self_check` → 完成或重做自检；`completed` → 可组装输出。
 - `trace_state 完整` 的定义：`status == completed` 且 `queue` 为空，且 `counters` 与实际数组长度一致。
@@ -373,7 +375,7 @@ xargs -r -a "<out>/tmp/scope_roots.txt" -d '\n' grep -I -rn -F "<pattern>"
    - trace_dispatch：trace_state 有效 → 按 status 处理：
        in_progress → 将 in_progress 工作项置回 pending，从第一个待处理项继续；重做该工作项的全部分支，已 analyzed 的 case 通过去重合并 handlers；queue 空 → 进入自检；
        self_check → 完成或重做自检（见第八章）；
-       completed → 进入 output；
+       completed → 进入 output，并设置 progress.phase = output、output.status = in_progress；
      trace_state 缺失或内容不完整 → 若 entry_state 有效且 bind.status == completed 且 dispatch_functions 非空，从 entry_state 重新初始化队列；否则回到 locate_entry；不可解析 → state_io_error；身份不一致 → state_conflict。
    - output：trace_state 有效且 status == completed 才组装输出；status == self_check → 先完成自检；status == in_progress → 回到 trace_dispatch；trace_state 缺失或内容不完整 → 回到 trace_dispatch；不可解析 → state_io_error；身份不一致 → state_conflict。成功后置 done。
 5. 加载 trace_state 后重新计算 counters（queue_remaining = queue.length；cases_total = cases.length；handlers_total = handlers.length；unresolved_total = unresolved.length）；与实际不一致时以实际数组为准，并将重算后的 counters 写回 state；用重算结果判断 trace_state 完整。
@@ -387,7 +389,7 @@ xargs -r -a "<out>/tmp/scope_roots.txt" -d '\n' grep -I -rn -F "<pattern>"
 - progress.json 存在但 phase 未完成 → 严格按恢复流程继续，不从头重跑。
 - 强制全新分析：删除 progress.json 与 tmp/。
 - 完成态 state 保留，不删除。
-- 同一 project_dir 同时只保留一个 service 的状态；分析另一个 service 前，先归档或删除旧 progress.json 与 tmp/。
+- 同一 project_dir 同时只保留一个 service 的状态；检测到不同 service 的 progress.json → 报 `state_conflict` 并停止，提示用户归档或删除旧 `progress.json` 与 `tmp/` 后重跑；skill 不自动删除、不继续分析。
 
 ## 五、阶段一：定位服务注册点
 
@@ -728,21 +730,23 @@ deviceObject->service = &hdfArHost->ioService;
 - **SendRequest / OnRemoteRequest 转发**：`stub->SendRequest(cmdId, data, reply)`、直接调用 `OnRemoteRequest`、调用已知 dispatcher。这些目标本身不是接口函数，按 3.8 入队；若转发位于某个 case 内，该 case 照常记录。
 - **无条件直接处理**：没有 cmdId 分支，但函数直接消费 data，或无条件调用 data 消费函数。按 3.6 的 `"*"` 规则记录。
 
-每个识别出的分支先写入 `cases`（字段见第四章：`id`、`dispatcher`、`dispatcher_file`、`dispatch_site`、`level`、`case_expr`、`case_value`、`outer_cmd_expr`、`outer_cmd_value`、`parent_case_id`、`status`、`handlers`、`evidence`）：
+每个识别出的分支先写入 `cases`（字段见第四章：`id`、`dispatcher`、`dispatcher_file`、`dispatcher_line`、`dispatch_site`、`level`、`case_expr`、`case_value`、`outer_cmd_expr`、`outer_cmd_value`、`parent_case_id`、`status`、`handlers`、`evidence`）：
 
 - `level` 取工作项 `path` 的长度（入口工作项为 1，每次转发入队 +1）；
 - `case_expr` 保留源码原文（宏名不替换为值）；
 - `outer_cmd_expr` / `outer_cmd_value` 按 3.4 填写；
 - `status` 先记 `pending`，该分支完整分析后改为 `analyzed`；
 - `evidence` 记分支条件、注册语句或表项原文。
+- `default_cases` 记录 `dispatcher`、`dispatcher_file`、`dispatcher_line`、`dispatch_site`、`evidence`；不写 handlers。
 
 ### 3.4 外层归属与 cmdId 取值
 
 ```text
 外层归属：
-effective_outer = 工作项.outer ?? 本用例
+effective_outer = 当前分支已确定外层 ?? 工作项.outer ?? 本用例
 
-- 工作项外层为空 → 本用例成为外层，记录宏/表达式和值。
+- 内层 case 继承其外层 case 的 effective_outer，不得用内层 case 覆盖外层。
+- 工作项外层为空且当前分支没有已确定外层 → 本用例成为外层，记录宏/表达式和值。
 - 外层已存在 → 保留外层，本用例只作内层证据。
 - Dispatch → SendRequest → OnRemoteRequest 时，OnRemoteRequest 的 switch case 成为外层。
 - 嵌套分发继承 effective_outer。
@@ -772,7 +776,7 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 - `#define` 只在 scope 内搜索与展开；维护宏展开 visited 集合，重复宏名即停止，防止宏环。展开时保留括号与 C 整数运算语义；除法/取模除数为 0 视为无法解析。
 - 枚举按显式赋值与隐式递增（前一个值 +1）计算；匿名枚举、命名空间内枚举、`enum class` 都要处理。
 - 宏/枚举/常量优先查代码，未命中或存在条件编译歧义时再查 `macro.json`；`macro.json` 只是辅助，不能覆盖代码中的确定定义。
-- 同名宏存在多个定义（不同文件或不同条件编译分支）时，不得任选：`case_value = null`，写 `unresolved`（`kind = "value"`），detail/tried 列出全部候选定义的文件、行号与表达式。
+- 同名宏存在多个定义（不同文件或不同条件编译分支）时，不得任选：`case_value = null`，写 `unresolved`（`kind = "cmd_value"`），detail/tried 列出全部候选定义的文件、行号与表达式。
 - 每个无法解析或存在冲突的 cmdId 至少产生一条 `unresolved`；同一 case 的重复解析只记一条。
 
 ### 3.5 data 派生追踪
@@ -886,7 +890,8 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 - `default_cases` 以 `(dispatcher_file, dispatcher_line, dispatch_site.file, dispatch_site.line)` 去重。
 - `unresolved` 以 `(kind, detail)` 去重，`tried` 合并后去重；同类候选只在首次出现时写 detail，后续补入 tried。
 - `dispatch_cache` 以 `(site.file, site.line, target)` 去重，条目包含 `site`、`target`、`candidates`、`resolved`；已解析的调用点复用缓存结果，不重复搜索。
-- `visited` 条目记录函数定义信息与 cmd 上下文：`dispatcher`、`dispatcher_file`、`dispatcher_line`、`current_cmd_expr`、`current_cmd_value`、`outer_cmd_expr`、`outer_cmd_value`、`data_derived`、`path`；以环检测键去重。
+- `visited` 条目记录函数定义信息与 cmd 上下文：`dispatcher`、`dispatcher_file`、`dispatcher_line`、`current_cmd_expr`、`current_cmd_value`、`outer_cmd_expr`、`outer_cmd_value`、`data_vars`、`data_derived`、`path`；以环检测键去重。
+- `unresolved.kind` 取值：`cmd_value` / `target` / `definition` / `data_deferred` / `cycle`。
 
 收尾与状态切换：
 
@@ -924,6 +929,7 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 
 - `cmd_id_value` 直接取自 `trace_state.handlers`，不重新解析；3.4 判定可计算的掩码/组合保留整数，只有范围、不可计算或无法解析时为 null。
 - `cmd_id_macro` 也可以为 `"*"`（3.6 的无条件/内联处理）；此类记录按原样保留，`cmd_id_value` 为 null，正常参与去重与排序。仅 `default` 分支不输出。
+- 示例中的 `ActivityInterfaceStubGetVersion` 是全局函数；若是命名空间/类成员，必须写定义处完整限定名。
 
 输出规则：
 
@@ -1040,7 +1046,7 @@ codegraph 未安装/未配置 → 用常规工具代替，不中断分析。
 | `bind_definition_not_found` | Bind 函数体不在 scope 内 | 报告，结束 |
 | `bind_ambiguous` | 多个同名 Bind 定义无法区分 | 列出候选，结束 |
 | `dispatch_not_found` | 找不到 Dispatch 函数 | 报告，结束 |
-| `state_conflict` | progress/entry_state/trace_state 的 project_dir/service_name 与当前调用不一致 | 报告，结束，不删除旧状态 |
+| `state_conflict` | progress.json 的 project_dir/service_name 或其他状态文件的 service_name 与当前调用不一致 | 报告，结束，不删除旧状态 |
 | `state_io_error` | 状态文件读写失败或 JSON 不可解析 | 报告，结束 |
 | `output_write_failed` | 临时文件写入、回读校验、mv 或最终文件存在性确认失败 | 报告，保留 phase=output，便于重试 |
 | `self_check_failed` | 自检清单第 1-7 项失败 | 报告，`trace_state.status` 保持 `self_check`，`phase` 保持不变，结束，不写最终 JSON |
@@ -1104,7 +1110,7 @@ codegraph 未安装/未配置 → 用常规工具代替，不中断分析。
 1. 双方法检查到已有 `progress.json`，`project_dir` / `service_name` 与本次调用一致，`phase = trace_dispatch`；按恢复流程继续，不重新生成 scope。
 2. 校验 `trace_state.json` 有效：`service_name` 一致，`status = in_progress`，`queue` 中有一个 `status = in_progress` 的工作项（如 `dispatcher = OHOS::HDI::ActivityRecognition::V1_0::ActivityInterfaceStub::OnRemoteRequest`）。
 3. 将该工作项置回 `pending`，重新读取 dispatcher 完整函数体并重做其全部分支；已 `analyzed` 的 case 按去重键合并 handlers，不重复输出。
-4. 继续处理其余队列项；队列为空后 `trace_state.status = self_check`，完成自检、组装输出并置 `progress.phase = done`，报告最终结果。
+4. 继续处理其余队列项；队列为空后 `trace_state.status = self_check`，完成自检并置 `progress.phase = output`，组装输出、确认最终文件后置 `progress.phase = done`，报告最终结果。
 
 ### 示例三：service 未找到
 
