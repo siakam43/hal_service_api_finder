@@ -413,7 +413,7 @@ HDF_INIT(g_DemoDriverEntry);
 
 ### 定位 Bind 定义
 
-输入：`01_entry.json` 的 `entry.bind`、`entry.file`（阶段一已确认 `.Bind` 非空）。
+输入：`01_entry.json` 的 `entry.bind`、`entry.file`、`entry.init`（阶段一已确认 `.Bind` 非空）。
 
 1. 归一化 `.Bind` 取值：
    - 去掉首尾空白、取地址符 `&` 和强制类型转换（如 `(int32_t (*)(struct HdfDeviceObject *))HdfDemoDriverBind`），得到待解析标识符。
@@ -547,7 +547,8 @@ deviceObject->service = &hdfDemoHost->ioService;
 }
 ```
 
-- `bind` 对象字段沿用原定义（`function` / `file` / `line` / `host_type` / `dispatch_functions` / `stub` / `service_registration`），不写 `status`。
+- `service_name` 原样取自 `01_entry.json`；`entry` 只写 `variable`、`file`、`module_name` 三个字段。
+- `bind` 对象字段形状见第四章 4.2 的 `02_bind.json`（`function` / `file` / `line` / `host_type` / `dispatch_functions` / `stub` / `service_registration`），不写 `status`。
 - 直接写 `<out>/02_bind.json`；写入失败 → 删除可能残留的 `<out>/02_bind.json`，再写 `error.json`（`phase = "analyze_bind"`，`code = "snapshot_write_failed"`），停止。
 - 进入 `## 七、阶段三：cmdId 分发追踪`。
 
