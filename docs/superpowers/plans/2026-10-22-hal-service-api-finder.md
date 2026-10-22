@@ -286,7 +286,7 @@ xargs -r -a "<out>/tmp/scope_roots.txt" -d '\n' grep -I -rn -F "<pattern>"
 - 需要正则/词边界时，把 `-F` 换成 `-E` 并追加 `-w` 等参数，但文件参数仍必须来自上述清单。
 - 禁止 `grep -rn <project_dir>`、`rg <project_dir>`、`find <project_dir> -exec grep` 等任何等价的全仓搜索。
 - `xargs`/`grep` 退出码 1 或 123 表示“没有匹配”，不是工具失败；权限/读取错误应如实报告。
-- codegraph 返回的每个文件都必须按 `scope_files.txt` 过滤；范围外的结果直接丢弃。
+- codegraph 返回的每个文件都必须按 `scope_files.txt` 过滤；范围外的搜索命中直接丢弃，不读取、不记录；若分析中已明确知道某个目标定义在范围外，记入 `unresolved`。
 ````
 
 - [ ] **Step 5: Write macro.json, codegraph, and existence-check rules**
@@ -343,6 +343,7 @@ grep -n 'empty_scope' hal-service-api-finder/SKILL.md
 grep -n 'scope_roots = null' hal-service-api-finder/SKILL.md
 grep -n 'service_name.*不得包含' hal-service-api-finder/SKILL.md
 grep -n 'unresolved' hal-service-api-finder/SKILL.md
+grep -n '范围外的搜索命中' hal-service-api-finder/SKILL.md
 ```
 
 Expected: every command prints at least one matching line.
