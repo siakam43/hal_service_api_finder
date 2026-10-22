@@ -265,6 +265,36 @@ HDF_INIT(g_DemoDriverEntry);
    - `service_name`：当前 `<service_name>`；
    - `scope`：`file_count` 为 `<out>/scope_files.txt` 的行数；`clean_code` 为本次是否使用 clean_code.txt（布尔值）；`scope_files` 固定为 `"scope_files.txt"`；`scope_roots` 在使用 clean_code.txt 时为 `"scope_roots.txt"`，否则为 `null`；
    - `entry`：本阶段提取的 `variable`、`file`、`line`、`module_name`、`bind`、`init`、`release`、`registration`。
+
+   示例：
+
+   ```json
+   {
+     "service_name": "demo_service",
+     "scope": {
+       "file_count": 123,
+       "clean_code": true,
+       "scope_files": "scope_files.txt",
+       "scope_roots": "scope_roots.txt"
+     },
+     "entry": {
+       "variable": "g_DemoDriverEntry",
+       "file": "/abs/path/...",
+       "line": 39,
+       "module_name": "demo_service",
+       "bind": "HdfDemoDriverBind",
+       "init": "HdfDemoDriverInit",
+       "release": "HdfDemoDriverRelease",
+       "registration": {
+         "form": "HDF_INIT",
+         "file": "/abs/path/...",
+         "line": 50,
+         "evidence": "HDF_INIT(g_DemoDriverEntry)"
+       }
+     }
+   }
+   ```
+
 2. 直接写 `<out>/01_entry.json`；写入失败 → 删除可能残留的 `<out>/01_entry.json`，再写 `error.json`（`phase = "locate_entry"`，`code = "snapshot_write_failed"`），停止。
 3. 进入 `## 六、阶段二：分析 Bind`。
 
@@ -409,7 +439,7 @@ deviceObject->service = &hdfDemoHost->ioService;
 ```
 
 - `service_name` 原样取自 `01_entry.json`；`entry` 只写 `variable`、`file`、`module_name` 三个字段。
-- `bind` 对象字段形状见第四章 4.1 的 `02_bind.json`（`function` / `file` / `line` / `host_type` / `dispatch_functions` / `stub` / `service_registration`），不写 `status`。
+- `bind` 对象字段形状见上方示例（`function` / `file` / `line` / `host_type` / `dispatch_functions` / `stub` / `service_registration`），不写 `status`。
 - 直接写 `<out>/02_bind.json`；写入失败 → 删除可能残留的 `<out>/02_bind.json`，再写 `error.json`（`phase = "analyze_bind"`，`code = "snapshot_write_failed"`），停止。
 - 进入 `## 七、阶段三：cmdId 分发追踪`。
 
@@ -657,6 +687,11 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
   "unresolved": []
 }
 ```
+
+- `cases` 元素字段：`id`、`dispatcher`、`dispatcher_file`、`dispatcher_line`、`dispatch_site`、`level`、`case_expr`、`case_value`、`outer_cmd_expr`、`outer_cmd_value`、`parent_case_id`、`handlers`、`evidence`；其中 `handlers` 是 `{name, file, line}` 引用列表。
+- 顶层 `handlers` 元素字段：`cmd_id_macro`、`cmd_id_value`、`interface_function`、`file`、`definition_line`；`definition_line` 仅用于定位与去重，最终 JSON 不包含。
+- `default_cases` 元素字段：`dispatcher`、`dispatcher_file`、`dispatcher_line`、`dispatch_site`、`evidence`。
+- `unresolved` 元素字段：`kind`、`detail`、`tried`；`kind` 取 `cmd_value` / `target` / `definition` / `data_deferred` / `cycle`。
 
 - 写入失败 → 删除可能残留的 `<out>/03_trace.json`，再写 `error.json`（`phase = "trace_dispatch"`，`code = "snapshot_write_failed"`，message/evidence 记录写入错误），停止。
 - 写入成功后进入 `## 八、输出与自检`。

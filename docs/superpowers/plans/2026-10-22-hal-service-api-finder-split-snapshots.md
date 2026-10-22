@@ -90,7 +90,7 @@ sed -n '/^## 四、/,/^## 五、/p' hal-service-api-finder/SKILL.md | grep -n '�
 python3 - <<'PY'
 import json, re, pathlib
 text = pathlib.Path("hal-service-api-finder/SKILL.md").read_text(encoding="utf-8")
-blocks = re.findall(r"```json\n(.*?)\n```", text, re.S)
+blocks = re.findall(r"^[ \t]*```json\n(.*?)\n[ \t]*```", text, re.S | re.M)
 for block in blocks:
     json.loads(block)
 print(f"{len(blocks)} JSON blocks valid")
@@ -189,7 +189,7 @@ sed -n '/^## 七、/,/^## 八、/p' hal-service-api-finder/SKILL.md | grep -n '�
 python3 - <<'PY'
 import json, re, pathlib
 text = pathlib.Path("hal-service-api-finder/SKILL.md").read_text(encoding="utf-8")
-blocks = re.findall(r"```json\n(.*?)\n```", text, re.S)
+blocks = re.findall(r"^[ \t]*```json\n(.*?)\n[ \t]*```", text, re.S | re.M)
 for block in blocks:
     json.loads(block)
 print(f"{len(blocks)} JSON blocks valid")
