@@ -487,30 +487,19 @@ HDF_INIT(g_DemoDriverEntry);
 
 阶段二只做一件事：在 scope 内定位 `entry.bind` 指向的 Bind 函数定义，提取 Host 类型、全部 Dispatch 函数、可选的 stub/接口/实现类信息与服务注册证据，写出 `entry_state.bind` 后进入阶段三。本阶段不做 cmdId 追踪，不展开业务函数。
 
-本阶段所有搜索沿用第三章“搜索纪律”：只允许搜索 `scope_files.txt` 中的文件；`scope_roots.txt` 非 null 时可按第三章“方式二”搜索，但最终仍以 `scope_files.txt` 为硬边界；禁止任何等价的全仓搜索。
-
 ### 定位 Bind 定义
 
 输入：`entry_state.entry.bind`、`entry.file`（阶段一已确认 `.Bind` 非空）。
 
 1. 归一化 `.Bind` 取值：
    - 去掉首尾空白、取地址符 `&` 和强制类型转换（如 `(int32_t (*)(struct HdfDeviceObject *))HdfDemoDriverBind`），得到待解析标识符。
-   - 标识符是宏时：按第三章“方式一”在 scope 内搜索 `#define <宏名>`，必要时查 `macro.json`，逐层展开到函数名；无法展开或展开后找不到定义 → 报 `bind_definition_not_found`。
+   - 标识符是宏时：按「精确字符串搜索」查找 `#define <宏名>`，必要时查 `macro.json`，逐层展开到函数名；无法展开或展开后找不到定义 → 报 `bind_definition_not_found`。
    - 标识符是包装函数时（如函数体只有 `return HdfDemoDriverBind(dev);`）：沿调用继续解析到真正创建 Host、设置 Dispatch 的函数，`bind.function` 记真实 Bind 函数；若包装函数自身完成 Host/Dispatch 初始化，则以包装函数为准。
    - C++ 作用域函数保留限定名（如 `DemoDriver::Bind`）。若限定名在 scope 内找不到定义，定位该类的类定义并在类体内搜索未限定方法名；`bind.function` 仍记限定名。
    - 解析包装函数/初始化调用链时维护 visited 集合（键为 `(file, 签名行)`）；重复出现 → 停止并记录环，不得无限展开。
 2. 查找定义：
-   - 优先在 `entry.file` 内搜索（该文件必在 scope 内）：
-
-     ```bash
-     grep -I -H -n -E -w "<bind_name>" "<entry_file>"
-     ```
-
-   - 未找到再按第三章“方式一”在全 scope 搜索：
-
-     ```bash
-     xargs -r -a "<out>/tmp/scope_files.txt" -d '\n' grep -I -H -n -E -w "<bind_name>"
-     ```
+   - 优先按「指定文件搜索」在 `entry.file` 内查找 `<bind_name>`（该文件必在 scope 内）。
+   - 未找到再按「正则/词边界搜索」在全 scope 查找 `<bind_name>`。
 
    - 只接受函数定义；函数调用、声明、注释、字符串中的同名文本一律不算。
    - 读到的定义函数名必须与待解析标识符完全一致（C++ 限定名按限定名匹配；`HdfDemoDriverBindEx` 等不算）。
@@ -554,14 +543,7 @@ Bind 函数体内没有 Dispatch 赋值时，按以下顺序继续，不得因 B
 
 1. 跟随 Bind 函数体内调用的初始化/创建函数（接收 host、deviceObject 或返回 host 的函数），在 scope 内读取其完整函数体并查找上述赋值形式；维护 visited 集合（键为 `(file, 签名行)`），重复即停止并记录环。
 2. 检查阶段一记录的 `entry.init` 及其调用的 host 初始化函数，只在其中查找 Dispatch 赋值，不展开其他逻辑。
-3. 按第三章“方式一”在 scope 内搜索 Dispatch 赋值与 host 标识：
-
-   ```bash
-   xargs -r -a "<out>/tmp/scope_files.txt" -d '\n' grep -I -H -n -E '(\.|->)Dispatch[[:space:]]*='
-   xargs -r -a "<out>/tmp/scope_files.txt" -d '\n' grep -I -H -n -E -w "<host_var>"
-   ```
-
-   其中 `<host_var>` 替换为实际变量名；可再用 host 类型名补充搜索。
+3. 按「正则/词边界搜索」在 scope 内查找 Dispatch 赋值 `(\.|->)Dispatch[[:space:]]*=` 与 host 标识 `<host_var>`；其中 `<host_var>` 替换为实际变量名，可再用 host 类型名补充搜索。
 4. 对每个命中读取上下文，只保留作用于同一 host 实例（直接或经指针传递）的赋值。
 
 以上步骤完成后仍未找到任何 Dispatch 赋值 → 报 `dispatch_not_found`，保留 `phase = analyze_bind`，停止。
@@ -576,7 +558,7 @@ Bind 函数体内没有 Dispatch 赋值时，按以下顺序继续，不得因 B
    - `GetOrNewObject(serviceImpl, IDemoInterface::GetDescriptor())`：`interface_type` 取描述符所属接口或 `serviceImpl` 声明中的接口类型；`impl_class` 沿 `serviceImpl = impl`、`impl = new DemoService()` 等赋值回溯到实际传入的实现类；`stub_class` 取 scope 内该接口对应的生成 Stub 类型，搜索 `<interface_type>Stub` 以及去掉接口名前导 `I` 后的 `<StubName>`（如 `IDemoInterface` → `DemoInterfaceStub`），并用 `OnRemoteRequest` 交叉确认；无法确定时记 null，不猜测。
    - 其他等价形式（工厂函数返回 stub 等）同样回溯到 stub 类型与接口。
 3. 定位实现类定义：在 scope 内搜索 `class <impl_class>` / `struct <impl_class>`（允许命名空间限定），必须看到类体（不是仅前置声明），`impl_file` 记类定义文件；不在 scope 内或仅有前置声明记 null，不视为失败。
-4. 定位 `OnRemoteRequest`：按第三章“方式一”优先搜索 `<stub_class>::OnRemoteRequest`；未命中则在 stub 类定义文件及其基类定义中搜索 `OnRemoteRequest` 定义。多个候选时优先精确 stub 类，其次最近的基类；记录完整作用域限定名、文件、定义行，其余候选写入 `stub.evidence`。找不到时 `on_remote_request` 记 null，不视为失败。
+4. 定位 `OnRemoteRequest`：按「正则/词边界搜索」优先搜索 `<stub_class>::OnRemoteRequest`；未命中则在 stub 类定义文件及其基类定义中搜索 `OnRemoteRequest` 定义。多个候选时优先精确 stub 类，其次最近的基类；记录完整作用域限定名、文件、定义行，其余候选写入 `stub.evidence`。找不到时 `on_remote_request` 记 null，不视为失败。
 5. 组装 `bind.stub = {member, interface_type, impl_class, impl_file, stub_class, on_remote_request, evidence}`；`evidence` 记 stub 赋值与 `new`/`GetOrNewObject` 表达式原文。没有 stub 赋值或无法确认任何 stub 字段 → `bind.stub = null`。
 
 ### 服务注册证据
