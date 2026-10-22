@@ -35,12 +35,13 @@ description: 当用户调用 /hal-service-api-finder <project_dir> <service_name
 - interface_function：定义处的作用域限定名。
 - file：函数定义所在文件的绝对路径。
 
-中间结果：
-- progress.json
-- tmp/scope_files.txt
-- tmp/scope_roots.txt（仅 clean_code.txt 分支存在）
-- tmp/entry_state.json
-- tmp/trace_state.json
+中间结果（均位于 <out>）：
+- scope_files.txt
+- scope_roots.txt（仅 clean_code.txt 分支存在）
+- 01_entry.json
+- 02_bind.json
+- 03_trace.json
+- error.json（仅失败时）
 
 不生成 summary 报告。
 
@@ -73,8 +74,8 @@ description: 当用户调用 /hal-service-api-finder <project_dir> <service_name
 1. 先用双方法检查 `<project_dir>/.ethunter_out/clean_code.txt`：存在则按“clean_code.txt 优先，且是硬边界”建立 scope。
 2. `clean_code.txt` 不存在时，检查 `<project_dir>/.ethunter_out/.etignore`：存在则全量 find C/C++ 文件并按 `.etignore` 规则排除。
 3. `.etignore` 也不存在时，直接全量 find C/C++ 文件。
-4. 无论走哪条分支，都必须生成 `tmp/scope_files.txt`；存在 `clean_code.txt` 时还必须生成 `tmp/scope_roots.txt`，否则 `scope_roots` 置为 null。
-- 若存在与当前 `project_dir`/`service_name` 匹配的 `progress.json`，先执行第四章的恢复检查；只有全新分析才重新生成 scope 和 scope 文件，恢复流程明确要求重建的除外（如 scope_files.txt 缺失）。
+4. 无论走哪条分支，都必须生成 `<out>/scope_files.txt`；存在 `clean_code.txt` 时还必须生成 `<out>/scope_roots.txt`，否则 `scope_roots` 置为 null。
+- 每次执行都重新生成 `scope_files.txt` / `scope_roots.txt`，不读取旧 scope。
 
 ### clean_code.txt 优先，且是硬边界
 
@@ -85,7 +86,7 @@ description: 当用户调用 /hal-service-api-finder <project_dir> <service_name
 2. 以 / 开头为绝对路径，否则拼接为 <project_dir>/<行内容>。
 3. 路径去重、规范化（分隔符统一为 /，去掉前导 ./）。
 4. 普通文件加入 scope；文件夹递归展开为其中全部常规文件；不存在的路径忽略。
-5. 生成 tmp/scope_files.txt（展开后的绝对文件路径，去重、排序）和 tmp/scope_roots.txt（原始文件/文件夹条目，去重、排序）。
+5. 生成 <out>/scope_files.txt（展开后的绝对文件路径，去重、排序）和 <out>/scope_roots.txt（原始文件/文件夹条目，去重、排序）。
 6. scope 为空 → 报错 empty_scope 并结束。
 
 硬边界规则：
@@ -107,7 +108,7 @@ C/C++ 扩展名：
 find <project_dir> -type f \( -name "*.c" -o -name "*.h" -o -name "*.cpp" -o -name "*.cxx" -o -name "*.cc" -o -name "*.hpp" -o -name "*.hxx" -o -name "*.hh" -o -name "*.inl" -o -name "*.ipp" \)
 ```
 
-无 clean_code.txt 时，`scope_roots = null`；不使用 `scope_roots.txt`。若存在旧的 `scope_roots.txt`，删除或忽略，避免陈旧状态被误用。
+无 clean_code.txt 时，`scope_roots = null`，不使用 `scope_roots.txt`。
 
 ### 搜索方法与纪律
 
@@ -119,10 +120,10 @@ find <project_dir> -type f \( -name "*.c" -o -name "*.h" -o -name "*.cpp" -o -na
 
 ```bash
 # 1. 精确字符串搜索
-xargs -r -a "<out>/tmp/scope_files.txt" -d '\n' grep -I -H -n -F "<pattern>"
+xargs -r -a "<out>/scope_files.txt" -d '\n' grep -I -H -n -F "<pattern>"
 
 # 2. 正则/词边界搜索
-xargs -r -a "<out>/tmp/scope_files.txt" -d '\n' grep -I -H -n -E "<pattern>"
+xargs -r -a "<out>/scope_files.txt" -d '\n' grep -I -H -n -E "<pattern>"
 
 # 3. 指定文件搜索
 grep -I -H -n -E "<pattern>" "<file>"
