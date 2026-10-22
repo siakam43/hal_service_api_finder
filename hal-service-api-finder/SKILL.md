@@ -284,7 +284,7 @@ xargs -r -a "<out>/tmp/scope_roots.txt" -d '\n' grep -I -rn -F "<pattern>"
       "current_cmd_value": null,
       "outer_cmd_expr": null,
       "outer_cmd_value": null,
-      "data_vars": ["data", "dataParcel"],
+      "data_vars": ["data"],
       "data_derived": true,
       "parent_case_id": null,
       "path": ["ArDriverDispatch"],
@@ -371,7 +371,7 @@ xargs -r -a "<out>/tmp/scope_roots.txt" -d '\n' grep -I -rn -F "<pattern>"
    - locate_entry：entry_state 有效且 entry 存在 → 跳到 analyze_bind；entry_state 缺失或内容不完整 → 重跑阶段一；不可解析 → state_io_error；身份不一致 → state_conflict。
    - analyze_bind：entry_state 有效且 bind.status == completed 且 dispatch_functions 非空 → 跳到 trace_dispatch；entry_state 有效但 bind 未完成 → 重跑阶段二；entry_state 缺失或内容不完整（无 entry）→ 回到 locate_entry；不可解析 → state_io_error；身份不一致 → state_conflict。
    - trace_dispatch：trace_state 有效 → 按 status 处理：
-       in_progress → 将 in_progress 工作项置回 pending，从第一个待处理项继续；跳过已 analyzed 的用例；queue 空 → 进入自检；
+       in_progress → 将 in_progress 工作项置回 pending，从第一个待处理项继续；重做该工作项的全部分支，已 analyzed 的 case 通过去重合并 handlers；queue 空 → 进入自检；
        self_check → 完成或重做自检（见第八章）；
        completed → 进入 output；
      trace_state 缺失或内容不完整 → 若 entry_state 有效且 bind.status == completed 且 dispatch_functions 非空，从 entry_state 重新初始化队列；否则回到 locate_entry；不可解析 → state_io_error；身份不一致 → state_conflict。
@@ -777,7 +777,7 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 
 ### 3.5 data 派生追踪
 
-在每个分支内追踪哪些实参是 data 派生值。工作项的 `data_vars` 记当前函数内与客户端 data 对应的形参名（不是调用点实参）；分支级的派生/覆盖随工作项在保存时持久化。
+在每个分支内追踪哪些实参是 data 派生值。工作项的 `data_vars` 只记当前函数内与客户端 data 对应的形参名（不是调用点实参，也不是局部 parcel）；分支级的派生/覆盖只在当前工作项内使用，不回写 `data_vars`。
 
 | 形式 | 是否 data 派生 |
 |------|----------------|
@@ -803,7 +803,7 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 
 1. 已知转发器；
 2. 接收 cmdId 且函数体内有分发逻辑；
-3. 排除项：纯日志、断言、框架 sbuf/parcel 转换、纯校验辅助、只收 cmdId 不收 data 也不分发、只收 reply 不读 data；
+3. 排除项：纯日志、断言、框架 sbuf/parcel 转换、纯校验辅助、无业务动作、只收 cmdId 不收 data 也不分发、只收 reply 不读 data；
 4. 接收 data/派生参数且不构成分发的业务函数 → 接口函数候选；
 5. 其余 → 忽略。
 
@@ -856,10 +856,9 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 
 入队前做环检测与去重：
 
-- 环检测键：`(函数定义文件+行号, current_cmd_expr, current_cmd_value, outer_cmd_expr, outer_cmd_value, data_derived)`。
+- 环检测键：`(函数定义文件+行号, current_cmd_expr, current_cmd_value, outer_cmd_expr, outer_cmd_value, sorted(data_vars), data_derived)`。不同 data 上下文（形参集合或派生状态不同）产生不同键，必须分别入队。
 - 键命中 `queue`：静默去重，不入队，不写 `unresolved`。
-- 键命中 `visited`：若该 visited 条目的 `path` 是当前工作项 `path` 的严格前缀 → 真环，写 `unresolved`（`kind = "cycle"`），detail 记录该键与路径，终止该分支；否则是菱形/重复路径，静默去重，不写 `unresolved`。
-- 当前 `data_derived = true` 而命中条目的 `data_derived = false` → 不视为重复，允许重新入队并合并分析，避免先处理非派生路径时漏掉 data 消费接口。
+- 键命中 `visited`：以准备入队的候选工作项的 `path` 为准；若该 visited 条目的 `path` 是候选 `path` 的严格前缀 → 真环，写 `unresolved`（`kind = "cycle"`），detail 记录该键与路径，终止该分支；否则是菱形/重复路径，静默去重，不写 `unresolved`。
 - 同一目标以不同的 cmd 上下文到达时键不同，必须分别入队；不得因函数名相同而合并。
 - 不设深度上限、不设扇出上限：同一分支的全部转发器/内层 dispatcher 都入队，按队列逐个处理。
 
@@ -880,7 +879,7 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 
 去重与幂等规则：
 
-- 工作项以环检测键去重；恢复时把 `in_progress` 工作项置回 `pending`，重新读取 dispatcher；只有在同一工作项且 `effective_outer` 相同时才跳过已 `analyzed` 的 case，不同工作项或不同外层必须重新生成 handlers。
+- 工作项以环检测键去重；恢复时把 `in_progress` 工作项置回 `pending`，重新读取 dispatcher，重做该工作项的全部分支；case/handlers 按去重键合并，不重复输出。
 - case 以 `(dispatcher_file, dispatcher_line, dispatch_site.file, dispatch_site.line, case_expr, outer_cmd_expr, outer_cmd_value)` 去重；重复命中时复用已有 case id，合并 evidence 与 handlers，不新建。
 - 分支以 3.9 任一条件终止后，将该 case 置为 `analyzed`。
 - handler 以 `(cmd_id_macro, cmd_id_value, interface_function, file, definition_line)` 去重；同一业务函数在不同 cmdId 下分别保留多条记录。

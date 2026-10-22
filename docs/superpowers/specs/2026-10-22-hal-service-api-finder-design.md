@@ -343,7 +343,7 @@ host->Dispatch = X;              // Host 直接内嵌 IDeviceIoService 时
    - `current_cmd_expr`：cmdId 参数名（通常 `cmdId`）；
    - `current_cmd_value`：`null`；
    - `outer_cmd_expr` / `outer_cmd_value`：`null`；
-   - `data_vars`：`data` 及由 `SbufToParcel` 等转换出的 parcel 指针；
+   - `data_vars`：目标函数中与客户端 data 对应的形参名（如 `data`）；由 `SbufToParcel` 等转换出的局部变量按 3.5 追踪，不写入 data_vars；
    - `parent_case_id`：`null`；
    - `path`：`[dispatcher]`；
    - `status`：`pending`。
@@ -402,13 +402,20 @@ effective_outer = 工作项.outer ?? 本用例
 | `&data`、`*data`、cast | 是 |
 | `data.member`、`data->member` | 是 |
 | `data.ReadXxx()` 的返回值或输出参数 | 是 |
+| `HdfSbufReadXxx(data, &out)` 等以 data 为输入并写出结果的框架读取/转换函数 | 是 |
 | `SbufToParcel(data, &parcel)` 后的 `parcel` | 是 |
 | 上述变量的简单赋值/别名 | 是 |
 | 被非 data 值覆盖 | 否，移出派生集合 |
 | `reply` 及其派生值 | 否 |
 | 写入全局/成员后在另一个函数读取 | 记 `unresolved`（`data_deferred`），不臆造跨函数传播 |
 
-对分支内每个调用，按目标特征处理：
+对分支内每个调用，按以下顺序判定，命中即停（保证各行互斥）：
+
+1. 已知转发器；
+2. 接收 cmdId 且函数体内有分发逻辑；
+3. 排除项：纯日志、断言、框架 sbuf/parcel 转换、纯校验辅助、无业务动作、只收 cmdId 不收 data 也不分发、只收 reply 不读 data；
+4. 接收 data/派生参数且不构成分发的业务函数 → 接口函数候选；
+5. 其余 → 忽略。
 
 | 目标特征 | 处理 |
 |----------|------|
@@ -458,7 +465,7 @@ C++ 间接调用、虚函数、函数指针、重载等解析细节可参考 tai
 1. 分支内找到 data 消费的直接目标业务函数 → 记为接口函数，停止深入该业务函数内部；
 2. 分支内确实没有 data 消费目标 → 记录 evidence，结束该分支；
 3. 目标无法静态确定，或定义不在 scope 内 → 记入 `unresolved`；
-4. 同一 `(函数定义文件+行号, current_cmd_expr, current_cmd_value, outer_cmd_expr, outer_cmd_value, data_derived)` 重复出现，且 `visited` 条目的 `path` 是当前 `path` 的严格前缀 → 记 `cycle`，停止该分支；队列重复/菱形重复按去重终止，不写 `unresolved`；当前 `data_derived = true` 而命中条目为 `false` → 允许重新入队并合并分析。
+4. 同一 `(函数定义文件+行号, current_cmd_expr, current_cmd_value, outer_cmd_expr, outer_cmd_value, sorted(data_vars), data_derived)` 重复出现，且 `visited` 条目的 `path` 是候选工作项 `path` 的严格前缀 → 记 `cycle`，停止该分支；队列重复/菱形重复按去重终止，不写 `unresolved`。不同 data 上下文（形参集合或派生状态不同）产生不同键，必须分别入队。
 
 - 环检测和 `visited` 去重只用于防止无限递归，不作为数量限制。
 - 若函数既做分发又直接处理 data：按分发函数继续追踪；只有不构成分发的 data 消费函数才作为接口函数。
@@ -481,7 +488,7 @@ C++ 间接调用、虚函数、函数指针、重载等解析细节可参考 tai
 
 - handlers 按 `(cmd_id_macro, cmd_id_value, interface_function, file)` 去重；
 - cases 按 `(dispatcher 定义文件+行号, dispatch_site 行号, case_expr, outer_cmd_expr, outer_cmd_value)` 去重；
-- 恢复时重做 `in_progress` 工作项，跳过已 `analyzed` 的用例；
+- 恢复时重做 `in_progress` 工作项的全部分支；已 `analyzed` 的 case 通过去重合并 handlers，不重复输出；
 - 重新处理同一工作项不得产生重复记录。
 
 ## 9. 最终 JSON 输出
@@ -656,7 +663,7 @@ C++ 间接调用、虚函数、函数指针、重载等解析细节可参考 tai
       "current_cmd_value": null,
       "outer_cmd_expr": null,
       "outer_cmd_value": null,
-      "data_vars": ["data", "dataParcel"],
+      "data_vars": ["data"],
       "data_derived": true,
       "parent_case_id": null,
       "path": ["ArDriverDispatch"],
@@ -743,7 +750,7 @@ C++ 间接调用、虚函数、函数指针、重载等解析细节可参考 tai
    - locate_entry：entry_state 有效且 entry 存在 → 跳到 analyze_bind；entry_state 缺失或内容不完整 → 重跑阶段一；不可解析 → state_io_error；身份不一致 → state_conflict。
    - analyze_bind：entry_state 有效且 bind.status == completed 且 dispatch_functions 非空 → 跳到 trace_dispatch；entry_state 有效但 bind 未完成 → 重跑阶段二；entry_state 缺失或内容不完整（无 entry）→ 回到 locate_entry；不可解析 → state_io_error；身份不一致 → state_conflict。
    - trace_dispatch：trace_state 有效 → 按 status 处理：
-       in_progress → 将 in_progress 工作项置回 pending，从第一个待处理项继续；跳过已 analyzed 的用例；queue 空 → 进入自检；
+       in_progress → 将 in_progress 工作项置回 pending，从第一个待处理项继续；重做该工作项的全部分支，已 analyzed 的 case 通过去重合并 handlers；queue 空 → 进入自检；
        self_check → 完成或重做自检（见第八章）；
        completed → 进入 output；
      trace_state 缺失或内容不完整 → 若 entry_state 有效且 bind.status == completed 且 dispatch_functions 非空，从 entry_state 重新初始化队列；否则回到 locate_entry；不可解析 → state_io_error；身份不一致 → state_conflict。

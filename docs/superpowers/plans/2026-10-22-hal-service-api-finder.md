@@ -497,7 +497,7 @@ Include this exact JSON block under a `### trace_state.json` heading:
       "current_cmd_value": null,
       "outer_cmd_expr": null,
       "outer_cmd_value": null,
-      "data_vars": ["data", "dataParcel"],
+      "data_vars": ["data"],
       "data_derived": true,
       "parent_case_id": null,
       "path": ["ArDriverDispatch"],
@@ -591,7 +591,7 @@ Include these exact blocks under the following headings:
    - locate_entry：entry_state 有效且 entry 存在 → 跳到 analyze_bind；entry_state 缺失或内容不完整 → 重跑阶段一；不可解析 → state_io_error；身份不一致 → state_conflict。
    - analyze_bind：entry_state 有效且 bind.status == completed 且 dispatch_functions 非空 → 跳到 trace_dispatch；entry_state 有效但 bind 未完成 → 重跑阶段二；entry_state 缺失或内容不完整（无 entry）→ 回到 locate_entry；不可解析 → state_io_error；身份不一致 → state_conflict。
    - trace_dispatch：trace_state 有效 → 按 status 处理：
-       in_progress → 将 in_progress 工作项置回 pending，从第一个待处理项继续；跳过已 analyzed 的用例；queue 空 → 进入自检；
+       in_progress → 将 in_progress 工作项置回 pending，从第一个待处理项继续；重做该工作项的全部分支，已 analyzed 的 case 通过去重合并 handlers；queue 空 → 进入自检；
        self_check → 完成或重做自检（见第八章）；
        completed → 进入 output；
      trace_state 缺失或内容不完整 → 若 entry_state 有效且 bind.status == completed 且 dispatch_functions 非空，从 entry_state 重新初始化队列；否则回到 locate_entry；不可解析 → state_io_error；身份不一致 → state_conflict。
@@ -820,13 +820,14 @@ Include the data-derived table exactly:
 | `&data`、`*data`、cast | 是 |
 | `data.member`、`data->member` | 是 |
 | `data.ReadXxx()` 的返回值或输出参数 | 是 |
+| `HdfSbufReadXxx(data, &out)` 等以 data 为输入并写出结果的框架读取/转换函数 | 是 |
 | `SbufToParcel(data, &parcel)` 后的 `parcel` | 是 |
 | 上述变量的简单赋值/别名 | 是 |
 | 被非 data 值覆盖 | 否，移出派生集合 |
 | `reply` 及其派生值 | 否 |
 | 写入全局/成员后在另一个函数读取 | 记 `unresolved`（`data_deferred`），不臆造跨函数传播 |
 
-Include the callee-classification table exactly:
+Before the table, state the ordered evaluation (forwarder → dispatcher → exclusions including 无业务动作 → generic data consumer → ignore), so the rows are mutually exclusive. Include the table exactly:
 
 | 目标特征 | 处理 |
 |----------|------|
@@ -857,7 +858,7 @@ Include:
 - Interface function definition must be in scope; otherwise `unresolved`, not output.
 - 不设深度上限、不设扇出上限。
 - Termination conditions: direct business handler found / no data target / unresolved / cycle.
-- Cycle key: `(函数定义文件+行号, current_cmd_expr, current_cmd_value, outer_cmd_expr, outer_cmd_value, data_derived)`. A queue hit or non-ancestor visited hit is silent dedup; only an ancestor visited hit is a `cycle`. If the current item is `data_derived = true` and the visited entry is `false`, re-enqueue and merge.
+- Cycle key: `(函数定义文件+行号, current_cmd_expr, current_cmd_value, outer_cmd_expr, outer_cmd_value, sorted(data_vars), data_derived)`. A queue hit or non-ancestor visited hit is silent dedup; only an ancestor visited hit is a `cycle`. Different data contexts produce different keys and are enqueued separately.
 - Functions that both dispatch and process data → follow as dispatcher.
 - Save `trace_state` after each work item; list all fields; idempotency/dedup rules.
 
