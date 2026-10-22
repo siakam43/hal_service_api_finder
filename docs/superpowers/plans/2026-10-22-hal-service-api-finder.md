@@ -11,6 +11,7 @@
 ---
 
 > 注：搜索命令已统一到 SKILL.md 第三章「搜索方法与纪律」，本文中的完整命令仅作历史记录。
+> 注：任务恢复机制已在后续重构中移除；本文中的 progress/state/resume 内容仅作历史记录。
 
 ## Testing Strategy
 

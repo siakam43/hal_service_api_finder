@@ -1078,7 +1078,7 @@ Expected:
 - no old `tmp/` paths (the "不创建 `tmp/` 子目录" statement and `*.json.tmp` atomic temp names are allowed);
 - heading count 12;
 - all JSON blocks valid;
-- line count below 1000 (record actual).
+- line count recorded (actual 1018; the ~1000 target was missed because snapshot schemas and field lists were added — do not trim analysis rules to hit it).
 
 - [ ] **Step 3: Test the backup snippet in a temporary directory**
 
@@ -1114,17 +1114,16 @@ rm -rf "$tmp"
 
 Expected: `first backup: OK`, `replacement backup: OK`, and `preserve backup when out absent: OK`.
 
-- [ ] **Step 4: Commit and push**
+- [ ] **Step 4: Commit on the feature branch**
 
 ```bash
-git add hal-service-api-finder/SKILL.md docs/superpowers/plans/2026-10-22-hal-service-api-finder.md docs/superpowers/specs/2026-10-22-hal-service-api-finder-design.md
-git -c user.name=siakam43 -c user.email=429872468@qq.com commit -m "refactor(hal-service-api-finder): remove task recovery mechanism"
-git push origin main
+git add docs/superpowers/plans/2026-10-22-hal-service-api-finder.md docs/superpowers/specs/2026-10-22-hal-service-api-finder-design.md docs/superpowers/plans/2026-10-22-hal-service-api-finder-remove-recovery.md
+git -c user.name=siakam43 -c user.email=429872468@qq.com commit -m "docs(hal-service-api-finder): add historical notes and final checks"
 git log -1 --oneline
 git status --short --branch
 ```
 
-Expected: commit and push succeed; working tree clean.
+Expected: commit succeeds on the feature branch; working tree clean. Do not push in this task. Merging to main and pushing are handled after the final review by the finishing-a-development-branch workflow.
 
 ---
 
