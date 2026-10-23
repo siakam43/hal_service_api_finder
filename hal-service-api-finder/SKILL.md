@@ -10,7 +10,7 @@ description: 当用户调用 /hal-service-api-finder <project_dir> <service_name
 ## 一、核心原则
 
 1. **分析质量优先于分析效率。** 宁可慢，不可草率。每个分支都要追到接口函数或明确的终止条件，不得因任务长而跳读、合并或提前退出。不设深度上限、不设扇出上限，所有静态可确定的目标全部追踪。
-2. **分析范围是硬边界。** 存在 `clean_code.txt` 时，只分析列表（含文件夹展开）内的文件；所有搜索都限制在 scope 内，禁止 `grep -rn <project_dir>`。
+2. **分析范围是硬边界。** 存在 `<service_name>_code.txt` 时，只分析列表（含文件夹展开）内的文件；所有搜索都限制在 scope 内，禁止 `grep -rn <project_dir>`。
 3. **只识别目标路径内第一个非封装业务函数。** cmdId 用例分支中直接接收 data 且不构成分发的业务函数若位于 `<target_path>` 下，先按名字规则判断是否为单线封装：是则沿唯一 data 下游继续，直到第一个非封装业务函数；否则当前函数即接口。找不到非封装业务函数时，保留最深的 `<target_path>` 封装函数。仍不展开最终接口的内部实现。
 4. **证据优先，不臆造。** 每个接口、每个 cmdId 值、每个调用目标都要有代码证据；无法确定的写入 `unresolved`，不得猜测。
 5. **全部由主 agent 完成。** 不调用 sub-agent，不把分析拆给子代理。
@@ -160,7 +160,7 @@ grep -I -H -n -E "<pattern>" "<file>"
 
 中间文件（均位于 `<out>`）：
 - scope_files.txt
-- scope_roots.txt（仅 clean_code.txt 分支存在）
+- scope_roots.txt（仅 `<service_name>_code.txt` 分支存在）
 - 01_entry.json
 - 02_bind.json
 - 03_trace.json
@@ -257,7 +257,7 @@ HDF_INIT(g_DemoDriverEntry);
 
 失败一律写 `error.json = {phase: "locate_entry", code, message, evidence}`，不写 `01_entry.json`，不进入阶段二，停止。
 
-- `service_not_found`：没有任何合法候选。`message` 必须包含 scope 文件数（`scope_files.txt` 行数）和已搜索模式（至少 `"<service_name>"`），并建议检查 service_name 拼写与 clean_code.txt 覆盖范围；`evidence` 列出被拒命中及其原因；零命中时明确写“0 命中”。
+- `service_not_found`：没有任何合法候选。`message` 必须包含 scope 文件数（`scope_files.txt` 行数）和已搜索模式（至少 `"<service_name>"`），并建议检查 service_name 拼写与 `<service_name>_code.txt` 覆盖范围；`evidence` 列出被拒命中及其原因；零命中时明确写“0 命中”。
 - `bind_not_found`：已选定唯一候选，但 `.Bind` 缺失、为空或为 `NULL` / `nullptr`。`message` 与 `evidence` 记录 `entry` 变量、文件、行号及 `.Bind` 原文/缺失情况。该检查在多命中消歧之后执行；失败时不写 `01_entry.json`，停止。
 
 ### 阶段产物
@@ -266,7 +266,7 @@ HDF_INIT(g_DemoDriverEntry);
 
 1. 组装 `01_entry.json`：
    - `service_name`：当前 `<service_name>`；
-   - `scope`：`file_count` 为 `<out>/scope_files.txt` 的行数；`clean_code` 为本次是否使用 clean_code.txt（布尔值）；`scope_files` 固定为 `"scope_files.txt"`；`scope_roots` 在使用 clean_code.txt 时为 `"scope_roots.txt"`，否则为 `null`；
+   - `scope`：`file_count` 为 `<out>/scope_files.txt` 的行数；`clean_code` 为本次是否使用 `<service_name>_code.txt`（布尔值）；`scope_files` 固定为 `"scope_files.txt"`；`scope_roots` 在使用 `<service_name>_code.txt` 时为 `"scope_roots.txt"`，否则为 `null`；
    - `entry`：本阶段提取的 `variable`、`file`、`line`、`module_name`、`bind`、`init`、`release`、`registration`。
 
    示例：
@@ -878,7 +878,7 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 | 工具 | 用途 |
 |------|------|
 | `Bash` | find/grep/xargs/ast-grep/ls/mkdir/mv/rm，scope 内搜索、备份/清理输出目录 |
-| `Read` | 读取源码、macro.json、clean_code.txt/.etignore、阶段快照、待回读的临时 JSON |
+| `Read` | 读取源码、macro.json、`<service_name>_code.txt`/.etignore、阶段快照、待回读的临时 JSON |
 | `Write` | 写入 scope_files.txt、scope_roots.txt、01_entry.json、02_bind.json、03_trace.json、error.json、最终 JSON（含临时文件） |
 | `mcp__codegraph__codegraph_explore` | （可选）.codegraph 存在时优先的代码探索工具 |
 | `mcp__plugin_oh-my-claudecode_t__ast_grep_search` | （可选）AST 模式搜索 |
@@ -889,7 +889,7 @@ codegraph 未安装/未配置 → 用常规工具代替，不中断分析。
 
 1. 全部由主 agent 完成，不调用 sub-agent。
 2. 质量优先；不设深度/扇出上限；所有分支追到接口函数或明确终止条件。
-3. clean_code.txt 是硬边界；grep 只用 scope_files/scope_roots；codegraph 结果按 scope 过滤；禁止全仓 grep。
+3. `<service_name>_code.txt` 是硬边界；grep 只用 scope_files/scope_roots；codegraph 结果按 scope 过滤；禁止全仓 grep。
 4. 只输出 `<target_path>` 下第一个非封装业务函数（含 3.6 的 `*` 无条件/内联处理记录）；名字相近的单线封装继续下钻，找不到非封装业务函数时输出最深的 `<target_path>` 封装函数。目标路径外只沿 data 实参继续追踪，不展开最终接口内部实现。
 5. 接口函数必须能在 scope 内定位到定义；范围外记 unresolved，不输出。
 6. 不臆造：无法解析的宏/目标写明尝试过的搜索方式。
@@ -937,7 +937,7 @@ codegraph 未安装/未配置 → 用常规工具代替，不中断分析。
 | 工作项 | 追踪队列中的单元，`kind` 为 `dispatch`（分发函数、当前 cmdId、外层 cmd、data 变量、`data_derived`、调用路径）或 `data_chase`（目标函数、data 变量、`effective_outer`、`origin_case_id`、`fallback_handler`、`evidence_chain`、调用路径） |
 | 中间结果 | `scope_files.txt`、`scope_roots.txt`、`01_entry.json`、`02_bind.json`、`03_trace.json`、`error.json` 等调试文件 |
 | scope_files | 分析范围内展开后的精确文件清单 |
-| scope_roots | clean_code.txt 中原始的文件/文件夹条目清单 |
+| scope_roots | `<service_name>_code.txt` 中原始的文件/文件夹条目清单 |
 | target_path | 外部接口落地区域，默认 `<project_dir>/vendor/hisi/`，可人工修改 |
 
 ## 十一、抗理性化检查
@@ -965,7 +965,7 @@ codegraph 未安装/未配置 → 用常规工具代替，不中断分析。
 /hal-service-api-finder /srv/ohos/drivers demo_service
 ```
 
-1. 初始化：校验参数；若 `/srv/ohos/drivers/.ethunter_out/hal-service-api-finder/demo_service` 已存在，先删除旧 `<out>_bak`（若存在），再把 `<out>` 备份为 `<out>_bak`，新建空目录；确定分析范围并生成 `<out>/scope_files.txt`（存在 `clean_code.txt` 时另生成 `<out>/scope_roots.txt`）。
+1. 初始化：校验参数；若 `/srv/ohos/drivers/.ethunter_out/hal-service-api-finder/demo_service` 已存在，先删除旧 `<out>_bak`（若存在），再把 `<out>` 备份为 `<out>_bak`，新建空目录；确定分析范围并生成 `<out>/scope_files.txt`（存在 `demo_service_code.txt` 时另生成 `<out>/scope_roots.txt`）。
 2. 阶段一：在 scope 内搜索 `"demo_service"`，定位 `struct HdfDriverEntry g_DemoDriverEntry = {...}` 与 `HDF_INIT(g_DemoDriverEntry)`；写 `<out>/01_entry.json`。
 3. 阶段二：定位 `HdfDemoDriverBind` 定义，识别 Host 类型与 `ioService.Dispatch = DemoDriverDispatch`，提取 `IDemoInterface`、`DemoService`、`DemoInterfaceStub` 及其 `OnRemoteRequest`；写 `<out>/02_bind.json`。
 4. 阶段三：以 `DemoDriverDispatch` 初始化内存队列，追踪 `SendRequest` 到 `DemoInterfaceStub::OnRemoteRequest`，枚举 8 个 cmdId 用例并解析宏值；对不在 `<target_path>` 下的直接目标继续沿 data 实参追踪，跳过名字相近的单线封装函数，直到 `DemoVendorInterface(data)` 按名字规则不再被判为封装；若只到达封装层，则记录最深的 `DemoVendorInterfaceWrapper`；队列为空后写 `<out>/03_trace.json`。
@@ -992,4 +992,4 @@ codegraph 未安装/未配置 → 用常规工具代替，不中断分析。
 1. 初始化与 scope 生成正常，`<out>/scope_files.txt` 共 127 个文件。
 2. 阶段一按「精确字符串搜索」查找 `"demo_service_typo"`，0 命中。
 3. 写 `<out>/error.json = {phase: "locate_entry", code: "service_not_found", message: ..., evidence: ...}`：`message` 记录 scope 文件数 127 与搜索模式 `"demo_service_typo"`，`evidence` 明确写“0 命中”；停止，不写 `01_entry.json`，不进入阶段二。
-4. 报告：`service_not_found`，分析范围 127 个文件，已搜索模式 `"demo_service_typo"`；建议检查 service_name 拼写（如 `demo_service`），并确认 `clean_code.txt` 覆盖了该驱动的定义文件。
+4. 报告：`service_not_found`，分析范围 127 个文件，已搜索模式 `"demo_service_typo"`；建议检查 service_name 拼写（如 `demo_service`），并确认 `demo_service_code.txt` 覆盖了该驱动的定义文件。
