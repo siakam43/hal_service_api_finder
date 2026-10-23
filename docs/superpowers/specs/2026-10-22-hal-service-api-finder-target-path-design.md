@@ -40,15 +40,18 @@
 在第三章「参数解析」末尾新增：
 
 ```text
-5. `<target_path>` 默认为 `<project_dir>/vendor/hisi/`；归一化为绝对路径并补尾斜杠，可人工修改。
+### 目标路径（非命令行参数）
+
+`<target_path>` 默认为 `<project_dir>/vendor/hisi/`；归一化为绝对路径并补尾斜杠，相对路径按 `<project_dir>` 展开，可人工修改。函数定义文件的绝对路径以 `<target_path>` 开头（区分大小写）才算在目标路径下。`<target_path>` 不扩大 scope；目标路径不存在或不在 scope 内时不会有函数命中。
 ```
 
 约定：
 
+- `<target_path>` 不是命令行参数，不参与参数个数校验，可人工修改。
 - `<project_dir>` 已是绝对路径，因此 `<target_path>` 默认也是绝对路径；人工改成相对路径时，按 `<project_dir>` 展开。
 - 判断函数在目标路径下：函数定义文件的绝对路径以 `<target_path>` 开头（区分大小写，`<target_path>` 末尾有 `/`，保证目录边界）。
 - `<target_path>` 只是过滤器，不扩大分析范围；目标文件仍需在 `scope_files.txt` 中才能读取。
-- 如果人工把 `<target_path>` 改到 scope 外，目标定义无法读取，按范围外规则记 unresolved。
+- 目标路径不存在，或不在 scope 内时，不会有函数命中；如果人工把 `<target_path>` 改到 scope 外，目标定义无法读取，按范围外规则记 unresolved。
 
 ## 4. 3.6 分类规则
 
@@ -159,20 +162,26 @@
 - 第一章核心原则 3 改为：
 
 ```text
-3. **只识别目标路径内的业务函数。** cmdId 用例分支中直接接收 data 的业务函数若位于 `<target_path>` 下，即为接口；否则沿 data 实参继续追踪到 `<target_path>` 下的业务函数。仍不展开 `<target_path>` 内业务函数的内部实现。
+3. **只识别目标路径内的业务函数。** cmdId 用例分支中直接接收 data 且不构成分发的业务函数若位于 `<target_path>` 下，即为接口；否则沿 data 实参继续追踪到 `<target_path>` 下的业务函数。仍不展开 `<target_path>` 内业务函数的内部实现。
 ```
 
 - 第七章 `03_trace.json` 的 `unresolved` 元素字段说明中，`kind` 取值增加 `target_path`。
 - 第十章约束 4 改为：
 
 ```text
-4. 只输出 `<target_path>` 下接收 data 的业务函数（含 3.6 的 `*` 无条件/内联处理记录）；目标路径外只沿 data 实参继续追踪，不展开目标路径内业务实现。
+4. 只输出 `<target_path>` 下接收 data 且不构成分发的业务函数（含 3.6 的 `*` 无条件/内联处理记录）；目标路径外只沿 data 实参继续追踪，不展开目标路径内业务实现。
 ```
 
 - 第十章术语表新增：
 
 ```text
 | target_path | 外部接口落地区域，默认 `<project_dir>/vendor/hisi/`，可人工修改 |
+```
+
+- 第十章术语表「接口函数」行更新为：
+
+```text
+| 接口函数 | cmdId 用例分支中直接接收客户端 data（或 data 派生值）且定义在 `<target_path>` 下的业务函数 |
 ```
 
 - 第十一章抗理性化对应行改为：

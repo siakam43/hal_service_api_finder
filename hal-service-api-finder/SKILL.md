@@ -11,7 +11,7 @@ description: 当用户调用 /hal-service-api-finder <project_dir> <service_name
 
 1. **分析质量优先于分析效率。** 宁可慢，不可草率。每个分支都要追到接口函数或明确的终止条件，不得因任务长而跳读、合并或提前退出。不设深度上限、不设扇出上限，所有静态可确定的目标全部追踪。
 2. **分析范围是硬边界。** 存在 `clean_code.txt` 时，只分析列表（含文件夹展开）内的文件；所有搜索都限制在 scope 内，禁止 `grep -rn <project_dir>`。
-3. **只识别目标路径内的业务函数。** cmdId 用例分支中直接接收 data 的业务函数若位于 `<target_path>` 下，即为接口；否则沿 data 实参继续追踪到 `<target_path>` 下的业务函数。仍不展开 `<target_path>` 内业务函数的内部实现。
+3. **只识别目标路径内的业务函数。** cmdId 用例分支中直接接收 data 且不构成分发的业务函数若位于 `<target_path>` 下，即为接口；否则沿 data 实参继续追踪到 `<target_path>` 下的业务函数。仍不展开 `<target_path>` 内业务函数的内部实现。
 4. **证据优先，不臆造。** 每个接口、每个 cmdId 值、每个调用目标都要有代码证据；无法确定的写入 `unresolved`，不得猜测。
 5. **全部由主 agent 完成。** 不调用 sub-agent，不把分析拆给子代理。
 
@@ -51,7 +51,9 @@ description: 当用户调用 /hal-service-api-finder <project_dir> <service_name
 4. `<service_name>` 仅去除首尾空白，保持大小写与其余字符不变，用于后续精确匹配。
 - `service_name` 仅允许字母、数字、下划线、点和连字符；不得包含 `/`、`\`、空白、换行、NUL、引号或 shell 元字符；不满足 → 报错 `usage_error` 并结束。
 - 搜索时按字面量处理并正确加引号（优先 `grep -F`）。
-5. `<target_path>` 默认为 `<project_dir>/vendor/hisi/`；归一化为绝对路径并补尾斜杠，相对路径按 `<project_dir>` 展开，可人工修改。
+### 目标路径（非命令行参数）
+
+`<target_path>` 默认为 `<project_dir>/vendor/hisi/`；归一化为绝对路径并补尾斜杠，相对路径按 `<project_dir>` 展开，可人工修改。函数定义文件的绝对路径以 `<target_path>` 开头（区分大小写）才算在目标路径下。`<target_path>` 不扩大 scope；目标路径不存在或不在 scope 内时不会有函数命中。
 
 ### 输出目录初始化
 
@@ -453,7 +455,7 @@ deviceObject->service = &hdfDemoHost->ioService;
 
 ## 七、阶段三：cmdId 分发追踪
 
-阶段三只做一件事：从阶段二的 Dispatch（或 stub 的 OnRemoteRequest）出发，沿全部分发路径追踪 cmdId 与 data 的流向。对不在 `<target_path>` 下的 data 业务函数，沿 data 实参继续追踪；到 `<target_path>` 内接收 data 的业务函数即停止，不展开其内部实现，也不做完整污点传播。最终把接口函数候选写入 `<out>/03_trace.json`。
+阶段三只做一件事：从阶段二的 Dispatch（或 stub 的 OnRemoteRequest）出发，沿全部分发路径追踪 cmdId 与 data 的流向。对不在 `<target_path>` 下的 data 业务函数，沿 data 实参继续追踪；到 `<target_path>` 内接收 data 且不构成分发的业务函数即停止，不展开其内部实现，也不做完整污点传播。最终把接口函数候选写入 `<out>/03_trace.json`。
 
 - 不设深度上限、不设扇出上限；所有静态可确定的目标全部追踪，环检测是唯一的循环保护。
 - 接口函数定义必须在 scope 内；定义在 scope 外时记入 `unresolved`，不输出、不臆造。
@@ -580,7 +582,7 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 | 写入全局/成员后在另一个函数读取 | 记 `unresolved`（`data_deferred`），不臆造跨函数传播 |
 
 - 按分支作用域追踪：一个分支内的派生/覆盖不自动带到兄弟分支；控制流合流处无法确定时，保留派生标记并在该 case 的 `evidence` 中注明“合流处按派生保守处理”。
-- 只做分类所需的局部追踪，不要求完整污点传播路径；C++ 间接调用、虚函数、函数指针、重载等解析可参考 `taint-path-walker` skill，本 skill 只追踪到 cmdId 处理位置。
+- 只做分类所需的局部追踪，不要求完整污点传播路径；C++ 间接调用、虚函数、函数指针、重载等解析可参考 `taint-path-walker` skill，本 skill 只追踪到 `<target_path>` 内的业务函数或明确终止条件。
 - 全局变量或成员变量写入后在另一个函数读取时，写 `unresolved`（`kind = "data_deferred"`），记录写入点、读取点与已尝试的 scope 搜索；不得假设跨函数传播。
 - `reply` 及其派生值永远不参与 data 派生判断。
 
@@ -816,7 +818,7 @@ codegraph 未安装/未配置 → 用常规工具代替，不中断分析。
 1. 全部由主 agent 完成，不调用 sub-agent。
 2. 质量优先；不设深度/扇出上限；所有分支追到接口函数或明确终止条件。
 3. clean_code.txt 是硬边界；grep 只用 scope_files/scope_roots；codegraph 结果按 scope 过滤；禁止全仓 grep。
-4. 只输出 `<target_path>` 下接收 data 的业务函数（含 3.6 的 `*` 无条件/内联处理记录）；目标路径外只沿 data 实参继续追踪，不展开目标路径内业务实现。
+4. 只输出 `<target_path>` 下接收 data 且不构成分发的业务函数（含 3.6 的 `*` 无条件/内联处理记录）；目标路径外只沿 data 实参继续追踪，不展开目标路径内业务实现。
 5. 接口函数必须能在 scope 内定位到定义；范围外记 unresolved，不输出。
 6. 不臆造：无法解析的宏/目标写明尝试过的搜索方式。
 7. 输出路径一律绝对路径；函数名带作用域限定；重载用文件+行号区分。
@@ -857,7 +859,7 @@ codegraph 未安装/未配置 → 用常规工具代替，不中断分析。
 | 分发函数 | 根据 cmdId 选择处理路径的函数，包括 Dispatch、转发器、OnRemoteRequest、内层分发函数 |
 | cmdId 用例 | 分发结构中的一个具体 case 或条件分支 |
 | 外层 cmd | 调用链上最外层的具体 cmdId 用例的宏/表达式和值 |
-| 接口函数 | cmdId 用例分支中直接接收客户端 data（或 data 派生值）的业务函数 |
+| 接口函数 | cmdId 用例分支中直接接收客户端 data（或 data 派生值）且定义在 `<target_path>` 下的业务函数 |
 | 工作项 | 追踪队列中的单元：`(分发函数, 当前 cmdId 变量, 外层 cmd, data 变量, data_derived, 调用路径)` |
 | 中间结果 | `scope_files.txt`、`scope_roots.txt`、`01_entry.json`、`02_bind.json`、`03_trace.json`、`error.json` 等调试文件 |
 | scope_files | 分析范围内展开后的精确文件清单 |
@@ -879,7 +881,7 @@ codegraph 未安装/未配置 → 用常规工具代替，不中断分析。
 | “想复用上次结果” | 每次执行先备份旧输出目录，再从零分析，不复用历史结果。 |
 | “用 sub-agent 并行快一点” | 禁止；全部由主 agent 完成。 |
 | “只收 reply 也算接口” | 纯 reply、不读 data 的函数不算。 |
-| “业务函数内部还有处理，继续展开” | target_path 外只沿 data 实参追踪到目标路径；target_path 内不展开业务实现。 |
+| “业务函数内部还有处理，继续展开” | `<target_path>` 外只沿 data 实参追踪到目标路径；`<target_path>` 内不展开业务实现。 |
 
 ## 十二、使用示例
 

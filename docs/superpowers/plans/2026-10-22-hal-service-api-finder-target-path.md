@@ -20,7 +20,7 @@
 ### Task 1: Add target_path variable and global documentation
 
 **Files:**
-- Modify: `hal-service-api-finder/SKILL.md` (section 一 principle 3; section 三 参数解析; section 七 intro; section 十 constraint 4 and terminology; section 十一 anti-rationalization; section 十二 example 1)
+- Modify: `hal-service-api-finder/SKILL.md` (section 一 principle 3; section 三 参数解析; section 七 intro and 3.5; section 十 constraint 4 and terminology; section 十一 anti-rationalization; section 十二 example 1)
 
 - [ ] **Step 1: Replace core principle 3**
 
@@ -33,10 +33,10 @@ Replace:
 with:
 
 ```text
-3. **只识别目标路径内的业务函数。** cmdId 用例分支中直接接收 data 的业务函数若位于 `<target_path>` 下，即为接口；否则沿 data 实参继续追踪到 `<target_path>` 下的业务函数。仍不展开 `<target_path>` 内业务函数的内部实现。
+3. **只识别目标路径内的业务函数。** cmdId 用例分支中直接接收 data 且不构成分发的业务函数若位于 `<target_path>` 下，即为接口；否则沿 data 实参继续追踪到 `<target_path>` 下的业务函数。仍不展开 `<target_path>` 内业务函数的内部实现。
 ```
 
-- [ ] **Step 2: Add the target_path variable to 参数解析**
+- [ ] **Step 2: Add the target_path section to 参数解析**
 
 After item 4:
 
@@ -47,7 +47,9 @@ After item 4:
 insert:
 
 ```text
-5. `<target_path>` 默认为 `<project_dir>/vendor/hisi/`；归一化为绝对路径并补尾斜杠，相对路径按 `<project_dir>` 展开，可人工修改。
+### 目标路径（非命令行参数）
+
+`<target_path>` 默认为 `<project_dir>/vendor/hisi/`；归一化为绝对路径并补尾斜杠，相对路径按 `<project_dir>` 展开，可人工修改。函数定义文件的绝对路径以 `<target_path>` 开头（区分大小写）才算在目标路径下。`<target_path>` 不扩大 scope；目标路径不存在或不在 scope 内时不会有函数命中。
 ```
 
 - [ ] **Step 3: Replace the chapter 七 intro**
@@ -61,7 +63,7 @@ Replace:
 with:
 
 ```text
-阶段三只做一件事：从阶段二的 Dispatch（或 stub 的 OnRemoteRequest）出发，沿全部分发路径追踪 cmdId 与 data 的流向。对不在 `<target_path>` 下的 data 业务函数，沿 data 实参继续追踪；到 `<target_path>` 内接收 data 的业务函数即停止，不展开其内部实现，也不做完整污点传播。最终把接口函数候选写入 `<out>/03_trace.json`。
+阶段三只做一件事：从阶段二的 Dispatch（或 stub 的 OnRemoteRequest）出发，沿全部分发路径追踪 cmdId 与 data 的流向。对不在 `<target_path>` 下的 data 业务函数，沿 data 实参继续追踪；到 `<target_path>` 内接收 data 且不构成分发的业务函数即停止，不展开其内部实现，也不做完整污点传播。最终把接口函数候选写入 `<out>/03_trace.json`。
 ```
 
 - [ ] **Step 4: Replace constraint 4**
@@ -75,7 +77,7 @@ Replace:
 with:
 
 ```text
-4. 只输出 `<target_path>` 下接收 data 的业务函数（含 3.6 的 `*` 无条件/内联处理记录）；目标路径外只沿 data 实参继续追踪，不展开目标路径内业务实现。
+4. 只输出 `<target_path>` 下接收 data 且不构成分发的业务函数（含 3.6 的 `*` 无条件/内联处理记录）；目标路径外只沿 data 实参继续追踪，不展开目标路径内业务实现。
 ```
 
 - [ ] **Step 5: Replace the anti-rationalization row**
@@ -89,10 +91,38 @@ Replace:
 with:
 
 ```text
-| “业务函数内部还有处理，继续展开” | target_path 外只沿 data 实参追踪到目标路径；target_path 内不展开业务实现。 |
+| “业务函数内部还有处理，继续展开” | `<target_path>` 外只沿 data 实参追踪到目标路径；`<target_path>` 内不展开业务实现。 |
 ```
 
-- [ ] **Step 6: Add the terminology row**
+- [ ] **Step 6: Update the interface-function terminology row**
+
+Replace:
+
+```text
+| 接口函数 | cmdId 用例分支中直接接收客户端 data（或 data 派生值）的业务函数 |
+```
+
+with:
+
+```text
+| 接口函数 | cmdId 用例分支中直接接收客户端 data（或 data 派生值）且定义在 `<target_path>` 下的业务函数 |
+```
+
+- [ ] **Step 7: Update the 3.5 local-tracing bullet**
+
+Replace:
+
+```text
+- 只做分类所需的局部追踪，不要求完整污点传播路径；C++ 间接调用、虚函数、函数指针、重载等解析可参考 `taint-path-walker` skill，本 skill 只追踪到 cmdId 处理位置。
+```
+
+with:
+
+```text
+- 只做分类所需的局部追踪，不要求完整污点传播路径；C++ 间接调用、虚函数、函数指针、重载等解析可参考 `taint-path-walker` skill，本 skill 只追踪到 `<target_path>` 内的业务函数或明确终止条件。
+```
+
+- [ ] **Step 8: Add the terminology row**
 
 After:
 
@@ -106,7 +136,7 @@ insert:
 | target_path | 外部接口落地区域，默认 `<project_dir>/vendor/hisi/`，可人工修改 |
 ```
 
-- [ ] **Step 7: Update example 1 phase 3**
+- [ ] **Step 9: Update example 1 phase 3**
 
 Replace:
 
@@ -120,12 +150,12 @@ with:
 4. 阶段三：以 `DemoDriverDispatch` 初始化内存队列，追踪 `SendRequest` 到 `DemoInterfaceStub::OnRemoteRequest`，枚举 8 个 cmdId 用例并解析宏值；对不在 `<target_path>` 下的直接目标继续沿 data 实参追踪，直到 `DemoVendorInterface(data)` 落在 `<target_path>` 下；队列为空后写 `<out>/03_trace.json`。
 ```
 
-- [ ] **Step 8: Verify Task 1**
+- [ ] **Step 10: Verify Task 1**
 
 ```bash
 grep -n '<target_path> 默认为' hal-service-api-finder/SKILL.md
 grep -n '只识别目标路径内的业务函数' hal-service-api-finder/SKILL.md
-grep -n '只输出 `<target_path>` 下接收 data 的业务函数' hal-service-api-finder/SKILL.md
+grep -n '只输出 `<target_path>` 下接收 data 且不构成分发的业务函数' hal-service-api-finder/SKILL.md
 grep -n '| target_path | 外部接口落地区域' hal-service-api-finder/SKILL.md
 grep -n 'DemoVendorInterface(data)' hal-service-api-finder/SKILL.md
 grep -c '^## ' hal-service-api-finder/SKILL.md
@@ -133,7 +163,7 @@ grep -c '^## ' hal-service-api-finder/SKILL.md
 
 Expected: all five new lines present; heading count 12.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 11: Commit**
 
 ```bash
 git add hal-service-api-finder/SKILL.md
@@ -250,6 +280,18 @@ with the new section followed by the renumbered heading:
 ```
 
 - [ ] **Step 4: Add data_chase termination and dedup to 3.10, and update cross-references**
+
+Replace the first termination condition:
+
+```text
+1. 找到直接业务处理函数（接口函数已写入 `handlers`）；
+```
+
+with:
+
+```text
+1. 找到 `<target_path>` 下接收 data 且不构成分发的业务函数（接口函数已写入 `handlers`）；
+```
 
 After the four termination conditions in 3.10, insert:
 
@@ -473,6 +515,6 @@ git -c user.name=siakam43 -c user.email=429872468@qq.com commit -m "docs(hal-ser
 
 ## Plan Self-Review
 
-- **Spec coverage:** §3 → Task 1 Step 2; §4 → Task 3 Step 3; §5 → Task 3 Steps 1-2 and Task 2 Steps 1-2; §6 → Task 2 Step 3; §7 → Task 2 Step 3 item 4; §8 → Task 2 Steps 3-4 and Task 3 Steps 3-5; §9 → Task 2 Steps 3-4; §10 → Task 1 Steps 1, 3-7 and Task 3 Step 4.
+- **Spec coverage:** §3 → Task 1 Step 2; §4 → Task 3 Step 3; §5 → Task 3 Steps 1-2 and Task 2 Steps 1-2; §6 → Task 2 Step 3; §7 → Task 2 Step 3 item 4; §8 → Task 2 Steps 3-4 and Task 3 Steps 3-5; §9 → Task 2 Steps 3-4; §10 → Task 1 Steps 1, 3-6, 8-9 and Task 3 Step 4.
 - **Placeholder scan:** no TBD/TODO; every replacement is complete; every verification has expected output.
 - **Consistency:** the data-chase machinery (3.8/3.9/3.10) is added in Task 2 before Task 3 starts enqueuing `data_chase` items, so no intermediate commit points at a missing section. `data_chase` field names in 3.8 match those in 3.9; `origin_case_id` is null exactly for unconditional `*`; both unresolved kind lists are updated.
