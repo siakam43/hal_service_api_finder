@@ -64,15 +64,15 @@ description: 当用户调用 /hal-service-api-finder <project_dir> <service_name
 
 按以下优先级确定分析范围，命中即停止；范围一经生成即为本次分析的硬边界：
 
-1. 先用双方法检查 `<project_dir>/.ethunter_out/clean_code.txt`：存在则按“clean_code.txt 优先，且是硬边界”建立 scope。
-2. `clean_code.txt` 不存在时，检查 `<project_dir>/.ethunter_out/.etignore`：存在则全量 find C/C++ 文件并按 `.etignore` 规则排除。
+1. 先用双方法检查 `<project_dir>/.ethunter_out/<service_name>_code.txt`：存在则按“`<service_name>_code.txt` 优先，且是硬边界”建立 scope。
+2. `<service_name>_code.txt` 不存在时，检查 `<project_dir>/.ethunter_out/.etignore`：存在则全量 find C/C++ 文件并按 `.etignore` 规则排除。
 3. `.etignore` 也不存在时，直接全量 find C/C++ 文件。
-4. 无论走哪条分支，都必须生成 `<out>/scope_files.txt`；存在 `clean_code.txt` 时还必须生成 `<out>/scope_roots.txt`，否则 `scope_roots` 置为 null。
-- 每次执行都重新生成 `<out>/scope_files.txt`；`<out>/scope_roots.txt` 仅在存在 `clean_code.txt` 时生成；不读取旧 scope。
+4. 无论走哪条分支，都必须生成 `<out>/scope_files.txt`；存在 `<service_name>_code.txt` 时还必须生成 `<out>/scope_roots.txt`，否则 `scope_roots` 置为 null。
+- 每次执行都重新生成 `<out>/scope_files.txt`；`<out>/scope_roots.txt` 仅在存在 `<service_name>_code.txt` 时生成；不读取旧 scope。
 
-### clean_code.txt 优先，且是硬边界
+### `<service_name>_code.txt` 优先，且是硬边界
 
-双方法检查 <project_dir>/.ethunter_out/clean_code.txt 是否存在。
+双方法检查 <project_dir>/.ethunter_out/<service_name>_code.txt 是否存在。
 
 存在时：
 1. 逐行读取，去掉首尾空白；忽略空行和以 # 开头的注释行。
@@ -83,12 +83,12 @@ description: 当用户调用 /hal-service-api-finder <project_dir> <service_name
 6. scope 为空 → 写 `error.json`（`phase = "init"`，`code = "empty_scope"`），停止。
 
 硬边界规则：
-- clean_code.txt 存在时，不得分析或搜索列表以外的源文件。
+- `<service_name>_code.txt` 存在时，不得分析或搜索列表以外的源文件。
 - 入口、Bind、Dispatch、接口函数定义、宏定义的查找都只能在 scope 内进行。
 - 范围外不搜索；若已知目标在范围外，记入 `unresolved`，不输出、不臆造。
 - 搜索方式见下方 `### 搜索方法与纪律`。
 
-### clean_code.txt 不存在
+### `<service_name>_code.txt` 不存在
 
 1. `.ethunter_out/.etignore` 存在：按下方 find 命令收集 C/C++ 文件，再按 `.etignore` 规则排除；`.etignore` 语法与 `.gitignore` 一致。
 2. `.etignore` 也不存在：直接使用下方 find 命令收集 C/C++ 文件。
@@ -101,7 +101,7 @@ C/C++ 扩展名：
 find <project_dir> -type f \( -name "*.c" -o -name "*.h" -o -name "*.cpp" -o -name "*.cxx" -o -name "*.cc" -o -name "*.hpp" -o -name "*.hxx" -o -name "*.hh" -o -name "*.inl" -o -name "*.ipp" \)
 ```
 
-无 clean_code.txt 时，`scope_roots = null`，不使用 `scope_roots.txt`。
+无 `<service_name>_code.txt` 时，`scope_roots = null`，不使用 `scope_roots.txt`。
 
 ### 搜索方法与纪律
 
