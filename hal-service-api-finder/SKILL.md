@@ -615,7 +615,7 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 
 1. 自身不处理 data：不读取/解析 data 字段，不基于 data 做业务分支或计算，不写入成员/全局，不执行业务动作；只允许参数校验、空指针/长度/魔数/范围检查、日志、局部别名和类型转换。
 2. 函数体简单；出现复杂控制流或难以判断的逻辑 → 按真正处理处理，停止下钻。
-3. 统计业务 data 下游调用（实参含 data/派生值，排除纯校验/纯日志/框架转换调用，以及已知转发器/dispatcher 调用）：
+3. 统计业务 data 下游调用（实参含 data/派生值，排除纯校验/纯日志/框架转换调用）：
    - 0 个 → 当前函数记为接口；
    - ≥ 2 个 → 当前函数记为接口；
    - 1 个 → 继续第 4 条。
@@ -624,7 +624,7 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
    - 下游是普通业务函数，不是 dispatcher/转发器；
    - 下游定义可解析且在 scope 内；
    - 去掉命名空间/类限定后，当前函数名与下游函数名中，一个是另一个的前缀或后缀扩展，多出的部分不超过 8 个字符，且两者不完全相同。
-5. 判定为封装 → 不记录当前函数，按 3.8 入队 `data_chase`，目标为唯一业务下游，`fallback_handler` = 当前函数；`effective_outer` 取当前值，`origin_case_id` 取当前 case id，无条件处理时两者均为 null。
+5. 判定为封装 → 不记录当前函数，按 3.8 入队 `data_chase`，目标为唯一业务下游，`fallback_handler` = 当前函数；`effective_outer` 取当前值，`origin_case_id` 取当前 case id，无条件处理时两者均为 null；把 `当前函数名(data)` 追加到 `evidence_chain`。
 6. 任一条件不满足 → 当前函数记为接口，停止。
 
 分支级规则：
@@ -676,7 +676,7 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 - `effective_outer`：触发追踪的最外层 cmd 表达式与值，无外层时为 null；
 - `origin_case_id`：触发追踪的原 case id，无条件处理时为 null；
 - `path = 父工作项.path + [目标限定名]`；
-- `evidence_chain`：从触发追踪的原目标到当前函数的调用链文本。
+- `evidence_chain`：从触发追踪的原目标到当前函数的调用链文本；每经过一层封装追加 `封装函数名(data)`，例如 `起点 -> 封装1(data) -> 当前函数(data)`。
 - `fallback_handler`：已发现的最深 `<target_path>` 封装函数 `{function, file, line}`；没有时为 null。
 
 入队前做环检测与去重：
@@ -694,13 +694,13 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 
 1. 按 3.2 的同样方法读取函数完整函数体；定义不在 scope 内或无法唯一确定 → 记 `unresolved`（`kind = "definition"`），结束该工作项。
 2. 若当前函数定义在 `<target_path>` 下且是接收 data 的业务函数（非 dispatcher、非排除项）：按 3.6 的封装判定处理：
-   - 封装 → 按 3.8 入队 `data_chase`，目标为唯一业务下游，`fallback_handler` = 当前函数；结束当前工作项；
+   - 封装 → 按 3.8 入队 `data_chase`，目标为唯一业务下游，`fallback_handler` = 当前函数，并把 `当前函数名(data)` 追加到 `evidence_chain`；结束当前工作项；
    - 真正处理、0 个业务下游、多个业务下游、下游是 dispatcher、名字不相近或定义不可解析 → 按第 4 条记录当前函数，结束当前工作项。
 3. 当前函数在 `<target_path>` 外：按 3.5 找出所有“实参含 data 或 data 派生值”的调用，对每个调用按 3.7 解析目标：
    - 定义不在 scope、无法唯一确定或函数体不完整 → 记 `unresolved`（`kind = "definition"`），继续下一个调用；
    - 已知转发器或接收 cmdId（含 data 派生 cmdId）且有分发逻辑 → 按 3.8 入队 `kind = "dispatch"`，`current_cmd_expr` 取调用点 cmdId 实参，`parent_case_id = origin_case_id`；
    - 排除项 → 忽略，把调用原文与忽略原因追加到 `origin_case_id` 对应 case 的 `evidence`；`origin_case_id` 为 null 时写入当前追踪链；
-   - 接收 data 的业务函数，定义在 `<target_path>` 下 → 按 3.6 封装判定：封装则入队 `data_chase`（`fallback_handler` = 该函数），否则按第 4 条记录该函数；
+   - 接收 data 的业务函数，定义在 `<target_path>` 下 → 按 3.6 封装判定：封装则入队 `data_chase`（`fallback_handler` = 该函数），并把 `该函数名(data)` 追加到 `evidence_chain`；否则按第 4 条记录该函数；
    - 接收 data 的业务函数，定义在 `<target_path>` 外 → 按 3.8 入队 `data_chase`，`fallback_handler` 保持当前值；
    - 不接收 data/派生参数 → 不追踪。
 4. 记录接口（真正处理函数或 fallback）：
@@ -709,9 +709,10 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
    - 写入顶层 `handlers`，按现有五元组去重；
    - 若 `origin_case_id` 非 null，按 `{name, file, line}` 去重后追加到对应 case 的 `handlers`，并在该 case 的 `evidence` 追加追踪链；否则只写追踪链；
    - 记录 fallback 时，evidence 标注“最深封装函数（未找到真正处理函数）”。
-5. 当前函数在 `<target_path>` 外且没有任何业务 data 下游调用：
+5. 当前函数在 `<target_path>` 外：处理完第 3 条的所有调用后，若没有记录接口、也没有入队 dispatcher/`data_chase`：
    - `fallback_handler` 非 null → 按第 4 条记录 fallback；
-   - 否则 → `unresolved`（`kind = "target_path"`），detail 记录起点函数、`evidence_chain` 和已尝试的 data 实参调用。
+   - `fallback_handler` 为 null 且没有业务 data 下游调用（或调用均被排除）→ `unresolved`（`kind = "target_path"`），detail 记录起点函数、`evidence_chain` 和已尝试的 data 实参调用；
+   - 否则（调用均以 `definition`/`cycle` 终止）→ 不额外记 `target_path`，保留已有的 definition/cycle 记录。
 6. 由 `definition` 或 `cycle` 终止的路径不再重复记 `target_path`；已入队的路径由后续工作项处理。
 7. 真环 → `unresolved`（`kind = "cycle"`）；队列重复/菱形重复静默去重。
 8. 不设深度/扇出上限；同一函数有多个 data 实参调用时全部处理。
