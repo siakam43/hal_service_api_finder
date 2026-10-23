@@ -594,7 +594,7 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 1. 已知转发器；
 2. 接收 cmdId 且函数体内有分发逻辑；
 3. 排除项：纯日志、断言、框架 sbuf/parcel 转换、纯校验辅助、无业务动作、只收 cmdId 不收 data 也不分发、只收 reply 不读 data；
-4. 接收 data/派生参数且不构成分发的业务函数 → 定义在 `<target_path>` 下记为接口候选，否则入队 `kind = "data_chase"` 工作项；
+4. 接收 data/派生参数且不构成分发的业务函数 → 定义在 `<target_path>` 下执行下方封装判定；否则入队 `kind = "data_chase"` 工作项；
 5. 其余 → 忽略。
 
 纯校验辅助即使接收 data，也按排除项处理，不写 handlers。
@@ -604,21 +604,36 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 | 已知转发器（`SendRequest`、`OnRemoteRequest`、已知 dispatcher） | 入队为新工作项 |
 | 接收 cmdId 且函数体内有分发逻辑 | 入队为内层 dispatcher |
 | 接收 cmdId + data，且函数体内有分发 | 先作为分发函数入队，不直接记为接口 |
-| 接收 data/派生参数，且不构成分发 | 在 `<target_path>` 下记为接口候选；否则入队 `data_chase` |
+| 接收 data/派生参数，且不构成分发 | `<target_path>` 下执行封装判定：封装入队 `data_chase`，否则记为接口；路径外入队 `data_chase` |
 | 纯日志、断言、框架 sbuf/parcel 转换、纯校验辅助、无业务动作 | 忽略，写入 evidence |
 | 只接收 cmdId、不接收 data、也不分发 | 忽略 |
 | 只接收 reply、不读 data | 不记为接口函数 |
 
 目标是否在 `<target_path>` 下，按函数定义文件的绝对路径前缀判断（区分大小写）。
 
+封装判定（仅对 `<target_path>` 下接收 data/派生参数、不构成分发、且不是排除项的业务函数）：
+
+1. 自身不处理 data：不读取/解析 data 字段，不基于 data 做业务分支或计算，不写入成员/全局，不执行业务动作；只允许参数校验、空指针/长度/魔数/范围检查、日志、局部别名和类型转换。
+2. 函数体简单；出现复杂控制流或难以判断的逻辑 → 按真正处理处理，停止下钻。
+3. 统计业务 data 下游调用（实参含 data/派生值，排除纯校验/纯日志/框架转换调用）：
+   - 0 个 → 当前函数记为接口；
+   - ≥ 2 个 → 当前函数记为接口；
+   - 1 个 → 继续第 4 条。
+4. 该下游调用满足以下全部条件才判定为封装：
+   - 下游是普通业务函数，不是 dispatcher；
+   - 下游定义可解析且在 scope 内；
+   - 去掉命名空间/类限定后，当前函数名与下游函数名中，一个是另一个的前缀或后缀扩展，多出的部分不超过 8 个字符，且两者不完全相同。
+5. 判定为封装 → 不记录当前函数，按 3.8 入队 `data_chase`，目标为唯一业务下游，`fallback_handler` = 当前函数。
+6. 任一条件不满足 → 当前函数记为接口，停止。
+
 分支级规则：
 
-- 一个分支有多个 data 消费目标 → 每个目标分别按 `<target_path>` 判断：在目标路径下的各写一条 `handlers`，共用同一 `effective_outer`，并把 `{name, file, line}` 追加到当前 case 的 `handlers`；不在目标路径下的逐个入队 `data_chase`。
+- 一个分支有多个 data 消费目标 → 每个目标分别按 `<target_path>` 判断：在目标路径下的逐个执行封装判定（封装入队 `data_chase`，否则写 `handlers`，共用同一 `effective_outer` 并把 `{name, file, line}` 追加到当前 case）；不在目标路径下的逐个入队 `data_chase`。
 - 若函数既有 cmdId 分支，又在 `switch`/`if` 之前无条件消费 data（如 `ParseCommon(data)`），该无条件调用按 `"*"` 规则记录，不归属任何具体 case。
 - 一个分支只有内联 data 处理、没有调用目标 → 分发函数定义在 `<target_path>` 下时，把自身记为接口函数，`cmd_id_macro` / `cmd_id_value` 取 `effective_outer`；没有外层时 `cmd_id_macro = "*"`、`cmd_id_value = null`，并在该 case 的 `evidence` 中记录内联处理代码原文。不在 `<target_path>` 下时，记 `unresolved`（`kind = "target_path"`），detail 记录分发函数与内联处理位置。
 - `default` 分支只写入 `default_cases`（记录 dispatcher、分发位置与 evidence），不进入最终 JSON。
 - 无 cmdId 分支、函数自身直接消费 data（不经过调用）→ 在 `<target_path>` 下记为 `cmd_id_macro = "*"`、`cmd_id_value = null`；否则记 `unresolved`（`kind = "target_path"`）。
-- 无 cmdId 分支、无条件调用 data 消费函数 → 目标在 `<target_path>` 下时记为 `cmd_id_macro = "*"`、`cmd_id_value = null`；否则入队 `data_chase`。两种情况都在 evidence 中说明“无条件直接处理”；无当前 case 时写入追踪链。
+- 无 cmdId 分支、无条件调用 data 消费函数 → 目标在 `<target_path>` 下时执行封装判定（封装入队 `data_chase`，否则记为 `cmd_id_macro = "*"`、`cmd_id_value = null`）；否则入队 `data_chase`。两种情况都在 evidence 中说明“无条件直接处理”；无当前 case 时写入追踪链。
 - 只接收 cmdId、不接收 data、也不分发，或只接收 reply、不读 data 的目标，不得写入 `handlers`。
 - 纯日志/断言/框架转换/校验辅助等被忽略的调用，把调用原文与忽略原因追加到当前 case 的 `evidence`，不得静默丢弃。
 
@@ -650,7 +665,7 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 - `parent_case_id` 取当前 case 的 id；无条件转发时为 null；
 - `path = 父工作项.path + [目标限定名]`。
 
-`kind = "data_chase"` 工作项（不在 `<target_path>` 下的 data 业务函数）字段：
+`kind = "data_chase"` 工作项（路径外 data 业务函数，或 target_path 封装下钻目标）字段：
 
 - `kind = "data_chase"`；
 - `id` 沿用递增计数器；
@@ -661,11 +676,12 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 - `origin_case_id`：触发追踪的原 case id，无条件处理时为 null；
 - `path = 父工作项.path + [目标限定名]`；
 - `evidence_chain`：从触发追踪的原目标到当前函数的调用链文本。
+- `fallback_handler`：已发现的最深 `<target_path>` 封装函数 `{function, file, line}`；没有时为 null。
 
 入队前做环检测与去重：
 
 - `dispatch` 环检测键：`(函数定义文件+行号, current_cmd_expr, current_cmd_value, outer_cmd_expr, outer_cmd_value, sorted(data_vars), data_derived)`。不同 data 上下文（形参集合或派生状态不同）产生不同键，必须分别入队。
-- `data_chase` 环检测键：`(kind="data_chase", 定义文件+行号, effective_outer.expr, effective_outer.value, sorted(data_vars), origin_case_id)`。
+- `data_chase` 环检测键：`(kind="data_chase", 定义文件+行号, effective_outer.expr, effective_outer.value, sorted(data_vars), origin_case_id, fallback_handler 的 function/file/line 或 null)`。
 - 键命中 `queue`（按对应 `kind` 的键）：静默去重，不入队，不写 `unresolved`。
 - 键命中 `visited`：以准备入队的候选工作项的 `path` 为准；若该 visited 条目的 `path` 是候选 `path` 的严格前缀 → 真环，写 `unresolved`（`kind = "cycle"`），detail 记录该键与路径，终止该分支；否则是菱形/重复路径，静默去重，不写 `unresolved`。
 - 同一目标以不同的 cmd 上下文到达时键不同，必须分别入队；不得因函数名相同而合并。
@@ -701,7 +717,7 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 
 单个分支在以下任一条件满足时终止：
 
-1. 找到 `<target_path>` 下接收 data 且不构成分发的业务函数（接口函数已写入 `handlers`）；
+1. 找到 `<target_path>` 下真正处理 data 的业务函数（已写入 `handlers`），或已记录 fallback；
 2. 没有未处理的 data 消费目标（纯 cmdId 处理、纯转发已入队、data 消费目标已入队 `data_chase`、或目标被忽略）；
 3. 目标无法确定，已写入 `unresolved`；
 4. 真环命中（键在 `visited` 且其 `path` 是当前 `path` 的严格前缀）；队列重复/菱形重复按去重终止，不写 `unresolved`。
@@ -722,7 +738,7 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 - `unresolved` 以 `(kind, detail)` 去重，`tried` 合并后去重；同类候选只在首次出现时写 detail，后续补入 tried。
 - `dispatch_cache` 以 `(site.file, site.line, target)` 去重，条目包含 `site`、`target`、`candidates`、`resolved`。
 - `visited` 条目记录函数定义与上下文：dispatch 项记录 3.8 的 dispatch 字段，data_chase 项记录 3.8 的 data_chase 字段；以对应 kind 的环检测键去重。
-- `data_chase` 工作项以 `(kind, 定义文件+行号, effective_outer.expr, effective_outer.value, sorted(data_vars), origin_case_id)` 去重。
+- `data_chase` 工作项以 `(kind, 定义文件+行号, effective_outer.expr, effective_outer.value, sorted(data_vars), origin_case_id, fallback_handler 的 function/file/line 或 null)` 去重。
 - `unresolved.kind` 取值：`cmd_value` / `target` / `definition` / `data_deferred` / `cycle` / `target_path`。
 
 收尾：
