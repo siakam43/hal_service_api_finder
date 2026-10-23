@@ -469,7 +469,7 @@ deviceObject->service = &hdfDemoHost->ioService;
 1. `service_name` 取 `02_bind.json` 的顶层 `service_name`；`entry_dispatchers` 原样记录阶段二的全部 Dispatch 条目（包括 `file == null` 的条目）。
 2. `queue`、`cases`、`handlers`、`default_cases`、`unresolved`、`dispatch_cache`、`visited` 初始化为空数组。
 3. 对每个 `dispatch_functions` 条目：
-   - `file` 非 null：创建一个 `kind = "dispatch"` 的工作项，字段为 `id`、`dispatcher`、`dispatcher_file`、`dispatcher_line`、`current_cmd_expr`、`current_cmd_value`、`outer_cmd_expr`、`outer_cmd_value`、`data_vars`、`parent_case_id`、`path`：
+   - `file` 非 null：创建一个 `kind = "dispatch"` 的工作项，字段为 `id`、`dispatcher`、`dispatcher_file`、`dispatcher_line`、`current_cmd_expr`、`current_cmd_value`、`outer_cmd_expr`、`outer_cmd_value`、`data_vars`、`data_derived`、`parent_case_id`、`path`：
      - `id` 从 1 递增；`dispatcher` / `dispatcher_file` / `dispatcher_line` 取条目值；
      - `current_cmd_expr` 记该 Dispatch 实际承载 cmdId 的表达式：优先 cmdId 形参名（如 `cmdId`）；若 cmdId 由 `HdfSbufReadUint32(data, &cmdId)` 等从 data 读入局部变量，则读函数体后修正为该局部变量；`current_cmd_value = null`；
      - `outer_cmd_expr = null`，`outer_cmd_value = null`；
@@ -498,7 +498,7 @@ deviceObject->service = &hdfDemoHost->ioService;
    - 解析 cmdId 表达式与取值（3.4）；
    - 追踪 data 派生（3.5）；
    - 解析并分类分支内的每个调用目标（3.6、3.7）；
-   - 接口函数候选写入 `handlers`；转发器与内层 dispatcher 入队（3.8）；无法确定的目标写入 `unresolved`。
+   - 仅 `<target_path>` 下的接口候选写入 `handlers`；转发器、内层 dispatcher 与 `data_chase` 入队（3.8）；无法确定的目标写入 `unresolved`。
 6. `default` 分支只写入 `default_cases`；函数体内没有任何 cmdId 分发结构时，按“无条件直接处理”规则处理（3.6）。
 7. 该工作项的全部分支处理完后，从 `queue` 移除该项，把环检测键追加到 `visited`（见 3.10）。
 8. 队列仍有项 → 继续下一项；队列为空 → 执行 3.10 收尾。
@@ -617,7 +617,8 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 - 若函数既有 cmdId 分支，又在 `switch`/`if` 之前无条件消费 data（如 `ParseCommon(data)`），该无条件调用按 `"*"` 规则记录，不归属任何具体 case。
 - 一个分支只有内联 data 处理、没有调用目标 → 分发函数定义在 `<target_path>` 下时，把自身记为接口函数，`cmd_id_macro` / `cmd_id_value` 取 `effective_outer`；没有外层时 `cmd_id_macro = "*"`、`cmd_id_value = null`，并在该 case 的 `evidence` 中记录内联处理代码原文。不在 `<target_path>` 下时，记 `unresolved`（`kind = "target_path"`），detail 记录分发函数与内联处理位置。
 - `default` 分支只写入 `default_cases`（记录 dispatcher、分发位置与 evidence），不进入最终 JSON。
-- 无 cmdId 分支、无条件直接调用 data 消费函数 → 目标在 `<target_path>` 下时记为 `cmd_id_macro = "*"`、`cmd_id_value = null`；否则入队 `data_chase`。两种情况都在 evidence 中说明“无条件直接处理”。
+- 无 cmdId 分支、函数自身直接消费 data（不经过调用）→ 在 `<target_path>` 下记为 `cmd_id_macro = "*"`、`cmd_id_value = null`；否则记 `unresolved`（`kind = "target_path"`）。
+- 无 cmdId 分支、无条件调用 data 消费函数 → 目标在 `<target_path>` 下时记为 `cmd_id_macro = "*"`、`cmd_id_value = null`；否则入队 `data_chase`。两种情况都在 evidence 中说明“无条件直接处理”；无当前 case 时写入追踪链。
 - 只接收 cmdId、不接收 data、也不分发，或只接收 reply、不读 data 的目标，不得写入 `handlers`。
 - 纯日志/断言/框架转换/校验辅助等被忽略的调用，把调用原文与忽略原因追加到当前 case 的 `evidence`，不得静默丢弃。
 
@@ -656,10 +657,10 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 - `function`：目标定义处限定名；
 - `file` / `line`：目标定义文件与签名行；
 - `data_vars`：目标函数中与 data 派生实参对应的形参名；
-- `effective_outer`：触发追踪的最外层 cmd 表达式与值；
+- `effective_outer`：触发追踪的最外层 cmd 表达式与值，无外层时为 null；
 - `origin_case_id`：触发追踪的原 case id，无条件处理时为 null；
 - `path = 父工作项.path + [目标限定名]`；
-- `evidence_chain`：从原目标到当前函数的调用链文本。
+- `evidence_chain`：从触发追踪的原目标到当前函数的调用链文本。
 
 入队前做环检测与去重：
 
@@ -680,9 +681,9 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
    - 定义不在 scope、无法唯一确定或函数体不完整 → 记 `unresolved`（`kind = "definition"`），继续下一个调用；
    - 已知转发器（`SendRequest`、`OnRemoteRequest`、已知 dispatcher）→ 按 3.8 入队 `kind = "dispatch"` 工作项，`current_cmd_expr` 取调用点传入的 cmdId 实参，`parent_case_id = origin_case_id`，其余字段按 3.8 构造；
    - 接收 cmdId + data 且函数体内有分发逻辑 → 按 3.8 入队 `kind = "dispatch"` 工作项，`current_cmd_expr` 取调用点传入的 cmdId 实参，`parent_case_id = origin_case_id`，其余字段按 3.8 构造；
+   - 排除项 → 忽略，把调用原文与忽略原因追加到 `origin_case_id` 对应 case 的 `evidence`；`origin_case_id` 为 null 时写入当前追踪链；
    - 接收 data 的业务函数，定义在 `<target_path>` 下 → 记为接口（见第 4 条）；
    - 接收 data 的业务函数，定义不在 `<target_path>` 下 → 按 3.8 入队新的 `kind = "data_chase"` 工作项；
-   - 排除项 → 忽略，把调用原文与忽略原因追加到 `origin_case_id` 对应 case 的 `evidence`；`origin_case_id` 为 null 时写入当前追踪链；
    - 不接收 data/派生参数 → 不追踪。
 4. 命中 `<target_path>` 业务函数时：
    - `interface_function`、`file`、`definition_line` 取该函数；

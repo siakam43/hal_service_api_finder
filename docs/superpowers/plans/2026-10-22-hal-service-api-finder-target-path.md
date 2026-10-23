@@ -220,10 +220,10 @@ with:
 - `function`：目标定义处限定名；
 - `file` / `line`：目标定义文件与签名行；
 - `data_vars`：目标函数中与 data 派生实参对应的形参名；
-- `effective_outer`：触发追踪的最外层 cmd 表达式与值；
+- `effective_outer`：触发追踪的最外层 cmd 表达式与值，无外层时为 null；
 - `origin_case_id`：触发追踪的原 case id，无条件处理时为 null；
 - `path = 父工作项.path + [目标限定名]`；
-- `evidence_chain`：从原目标到当前函数的调用链文本。
+- `evidence_chain`：从触发追踪的原目标到当前函数的调用链文本。
 ```
 
 Replace the queue-hit bullet in the 3.8 dedup rules:
@@ -274,9 +274,9 @@ with the new section followed by the renumbered heading:
    - 定义不在 scope、无法唯一确定或函数体不完整 → 记 `unresolved`（`kind = "definition"`），继续下一个调用；
    - 已知转发器（`SendRequest`、`OnRemoteRequest`、已知 dispatcher）→ 按 3.8 入队 `kind = "dispatch"` 工作项，`current_cmd_expr` 取调用点传入的 cmdId 实参，`parent_case_id = origin_case_id`，其余字段按 3.8 构造；
    - 接收 cmdId + data 且函数体内有分发逻辑 → 按 3.8 入队 `kind = "dispatch"` 工作项，`current_cmd_expr` 取调用点传入的 cmdId 实参，`parent_case_id = origin_case_id`，其余字段按 3.8 构造；
+   - 排除项 → 忽略，把调用原文与忽略原因追加到 `origin_case_id` 对应 case 的 `evidence`；`origin_case_id` 为 null 时写入当前追踪链；
    - 接收 data 的业务函数，定义在 `<target_path>` 下 → 记为接口（见第 4 条）；
    - 接收 data 的业务函数，定义不在 `<target_path>` 下 → 按 3.8 入队新的 `kind = "data_chase"` 工作项；
-   - 排除项 → 忽略，把调用原文与忽略原因追加到 `origin_case_id` 对应 case 的 `evidence`；`origin_case_id` 为 null 时写入当前追踪链；
    - 不接收 data/派生参数 → 不追踪。
 4. 命中 `<target_path>` 业务函数时：
    - `interface_function`、`file`、`definition_line` 取该函数；
@@ -407,7 +407,7 @@ Replace:
 with:
 
 ```text
-   - `file` 非 null：创建一个 `kind = "dispatch"` 的工作项，字段为 `id`、`dispatcher`、`dispatcher_file`、`dispatcher_line`、`current_cmd_expr`、`current_cmd_value`、`outer_cmd_expr`、`outer_cmd_value`、`data_vars`、`parent_case_id`、`path`：
+   - `file` 非 null：创建一个 `kind = "dispatch"` 的工作项，字段为 `id`、`dispatcher`、`dispatcher_file`、`dispatcher_line`、`current_cmd_expr`、`current_cmd_value`、`outer_cmd_expr`、`outer_cmd_value`、`data_vars`、`data_derived`、`parent_case_id`、`path`：
 ```
 
 Replace:
@@ -437,6 +437,18 @@ with:
 
 ```text
 1. 读取队列中的第一个工作项（不移出队列；处理完在第 7 步移除）。若 `kind = "data_chase"`，执行 3.9 后跳到第 7 步；否则继续第 2 步。
+```
+
+Replace:
+
+```text
+   - 接口函数候选写入 `handlers`；转发器与内层 dispatcher 入队（3.8）；无法确定的目标写入 `unresolved`。
+```
+
+with:
+
+```text
+   - 仅 `<target_path>` 下的接口候选写入 `handlers`；转发器、内层 dispatcher 与 `data_chase` 入队（3.8）；无法确定的目标写入 `unresolved`。
 ```
 
 - [ ] **Step 3: Add the path check to 3.6**
@@ -504,7 +516,8 @@ Replace the unconditional rule:
 with:
 
 ```text
-- 无 cmdId 分支、无条件直接调用 data 消费函数 → 目标在 `<target_path>` 下时记为 `cmd_id_macro = "*"`、`cmd_id_value = null`；否则入队 `data_chase`。两种情况都在 evidence 中说明“无条件直接处理”。
+- 无 cmdId 分支、函数自身直接消费 data（不经过调用）→ 在 `<target_path>` 下记为 `cmd_id_macro = "*"`、`cmd_id_value = null`；否则记 `unresolved`（`kind = "target_path"`）。
+- 无 cmdId 分支、无条件调用 data 消费函数 → 目标在 `<target_path>` 下时记为 `cmd_id_macro = "*"`、`cmd_id_value = null`；否则入队 `data_chase`。两种情况都在 evidence 中说明“无条件直接处理”；无当前 case 时写入追踪链。
 ```
 
 - [ ] **Step 4: Update the 03_trace field bullet**
