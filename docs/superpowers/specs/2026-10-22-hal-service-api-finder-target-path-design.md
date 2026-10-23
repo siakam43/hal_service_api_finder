@@ -20,12 +20,13 @@
 ### 2.1 修改
 
 - `hal-service-api-finder/SKILL.md`：
+  - 第一章核心原则 3、第十章约束 4、第十一章抗理性化对应行；
   - 第三章「参数解析」：新增 `<target_path>`；
   - 第七章 3.1、3.2、3.6、3.8；
   - 新增 3.9「target_path 深入追踪」，原 3.9 顺延为 3.10；
   - 3.10 的去重、终止、unresolved.kind；
   - 第七章收尾的 `03_trace.json` 字段说明；
-  - 第十章术语表。
+  - 第十章术语表、第十二章示例一。
 
 ### 2.2 不修改
 
@@ -148,11 +149,29 @@
 
 ## 10. 其他章节
 
+- 第一章核心原则 3 改为：
+
+```text
+3. **只识别目标路径内的业务函数。** cmdId 用例分支中直接接收 data 的业务函数若位于 `<target_path>` 下，即为接口；否则沿 data 实参继续追踪到 `<target_path>` 下的业务函数。仍不展开 `<target_path>` 内业务函数的内部实现。
+```
+
 - 第七章 `03_trace.json` 的 `unresolved` 元素字段说明中，`kind` 取值增加 `target_path`。
+- 第十章约束 4 改为：
+
+```text
+4. 只输出 `<target_path>` 下接收 data 的业务函数（含 3.6 的 `*` 无条件/内联处理记录）；目标路径外只沿 data 实参继续追踪，不展开目标路径内业务实现。
+```
+
 - 第十章术语表新增：
 
 ```text
 | target_path | 外部接口落地区域，默认 `<project_dir>/vendor/hisi/`，可人工修改 |
+```
+
+- 第十一章抗理性化对应行改为：
+
+```text
+| “业务函数内部还有处理，继续展开” | target_path 外只沿 data 实参追踪到目标路径；target_path 内不展开业务实现。 |
 ```
 
 - 第十二章示例一阶段三改为：以 `DemoDriverDispatch` 初始化内存队列，追踪 `SendRequest` 到 `DemoInterfaceStub::OnRemoteRequest`，枚举 8 个 cmdId 用例并解析宏值；对不在 `<target_path>` 下的直接目标继续沿 data 实参追踪，直到 `DemoVendorInterface(data)` 落在 `<target_path>` 下；队列为空后写 `<out>/03_trace.json`。
