@@ -364,7 +364,7 @@ with:
 6. 当前函数在 `<target_path>` 外：处理完第 3 条的所有调用后，若没有记录接口、也没有入队 dispatcher/`data_chase`：
    - `fallback_handler` 非 null → 按第 4 条记录 fallback；
    - `fallback_handler` 为 null：
-     - 没有业务 data 下游调用（或调用均被排除）→ `unresolved`（`kind = "target_path"`），detail 记录起点函数、`evidence_chain` 和已尝试的 data 实参调用；
+     - 没有业务 data 下游调用（或调用均被排除）且没有内联 data 处理 → `unresolved`（`kind = "target_path"`），detail 记录起点函数、`evidence_chain` 和已尝试的 data 实参调用；
      - 否则（不存在未处理且未入队的业务 data 调用，调用均以 `definition`/`cycle` 终止）→ 不额外记 `target_path`，保留已有的 definition/cycle 记录。
 7. 由 `definition` 或 `cycle` 终止的路径不再重复记 `target_path`；已入队的路径由后续工作项处理。
 ```
