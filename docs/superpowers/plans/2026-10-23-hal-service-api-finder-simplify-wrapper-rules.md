@@ -270,7 +270,7 @@ grep -c '^## ' hal-service-api-finder/SKILL.md
 wc -l hal-service-api-finder/SKILL.md
 ```
 
-Expected: old wording gone; new wording present; 5 JSON blocks valid; 12 headings; line count about 930-960 (record actual).
+Expected: old wording gone; new wording present; 5 JSON blocks valid; 12 headings; line count recorded (actual 995; rules simplified but the block length stayed similar).
 
 - [ ] **Step 9: Commit**
 
