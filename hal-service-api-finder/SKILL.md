@@ -613,7 +613,7 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 
 封装判定（仅对 `<target_path>` 下接收 data/派生参数、不构成分发、且不是排除项的业务函数）：
 
-1. 自身不处理 data：不读取/解析 data 字段，不基于 data 做业务分支或计算，不写入成员/全局，不执行业务动作；只允许参数校验、空指针/长度/魔数/范围检查、日志、局部别名和类型转换。
+1. 自身不处理 data：读取 data 仅限参数校验（空指针/长度/魔数/范围检查），不解析业务字段，不基于 data 做业务分支或计算，不写入成员/全局，不执行业务动作；允许日志、局部别名和类型转换。
 2. 函数体简单；出现复杂控制流或难以判断的逻辑 → 按真正处理处理，停止下钻。
 3. 统计业务 data 下游调用（实参含 data/派生值，排除纯校验/纯日志/框架转换调用）：
    - 0 个 → 当前函数记为接口；
@@ -698,7 +698,8 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
    - 真正处理、0 个业务下游、多个业务下游、下游是 dispatcher、名字不相近或定义不可解析 → 按第 4 条记录当前函数，结束当前工作项。
 3. 当前函数在 `<target_path>` 外：按 3.5 找出所有“实参含 data 或 data 派生值”的调用，对每个调用按 3.7 解析目标：
    - 定义不在 scope、无法唯一确定或函数体不完整 → 记 `unresolved`（`kind = "definition"`），继续下一个调用；
-   - 已知转发器或接收 cmdId（含 data 派生 cmdId）且有分发逻辑 → 按 3.8 入队 `kind = "dispatch"`，`current_cmd_expr` 取调用点 cmdId 实参，`parent_case_id = origin_case_id`；
+   - 已知转发器（`SendRequest`、`OnRemoteRequest`、已知 dispatcher）→ 若 `fallback_handler` 非 null，按第 4 条记录 fallback；否则按 3.8 入队 `kind = "dispatch"` 工作项，`current_cmd_expr` 取调用点传入的 cmdId 实参，`parent_case_id = origin_case_id`，其余字段按 3.8 构造；
+   - 接收 cmdId（包括从 data 派生得到的 cmdId）且函数体内有分发逻辑 → 若 `fallback_handler` 非 null，按第 4 条记录 fallback；否则按 3.8 入队 `kind = "dispatch"` 工作项，`current_cmd_expr` 取调用点传入的 cmdId 实参，`parent_case_id = origin_case_id`，其余字段按 3.8 构造；
    - 排除项 → 忽略，把调用原文与忽略原因追加到 `origin_case_id` 对应 case 的 `evidence`；`origin_case_id` 为 null 时写入当前追踪链；
    - 接收 data 的业务函数，定义在 `<target_path>` 下 → 按 3.6 封装判定：封装则入队 `data_chase`（`fallback_handler` = 该函数），并把 `该函数名(data)` 追加到 `evidence_chain`；否则按第 4 条记录该函数；
    - 接收 data 的业务函数，定义在 `<target_path>` 外 → 按 3.8 入队 `data_chase`，`fallback_handler` 保持当前值；
@@ -708,14 +709,20 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
    - `cmd_id_macro` / `cmd_id_value` 取 `effective_outer`；无外层时 `cmd_id_macro = "*"`、`cmd_id_value = null`；
    - 写入顶层 `handlers`，按现有五元组去重；
    - 若 `origin_case_id` 非 null，按 `{name, file, line}` 去重后追加到对应 case 的 `handlers`，并在该 case 的 `evidence` 追加追踪链；否则只写追踪链；
+   - 把记录的函数名以 `<function>(data)` 追加到追踪链（fallback 已在链尾时不再重复）；
    - 记录 fallback 时，evidence 标注“最深封装函数（未找到真正处理函数）”。
-5. 当前函数在 `<target_path>` 外：处理完第 3 条的所有调用后，若没有记录接口、也没有入队 dispatcher/`data_chase`：
+5. 若当前函数在 `<target_path>` 外且自身直接处理 data（不经过调用）：该内联路径按 fallback 处理：
    - `fallback_handler` 非 null → 按第 4 条记录 fallback；
-   - `fallback_handler` 为 null 且没有业务 data 下游调用（或调用均被排除）→ `unresolved`（`kind = "target_path"`），detail 记录起点函数、`evidence_chain` 和已尝试的 data 实参调用；
-   - 否则（调用均以 `definition`/`cycle` 终止）→ 不额外记 `target_path`，保留已有的 definition/cycle 记录。
-6. 由 `definition` 或 `cycle` 终止的路径不再重复记 `target_path`；已入队的路径由后续工作项处理。
-7. 真环 → `unresolved`（`kind = "cycle"`）；队列重复/菱形重复静默去重。
-8. 不设深度/扇出上限；同一函数有多个 data 实参调用时全部处理。
+   - 否则 → `unresolved`（`kind = "target_path"`），detail 记录起点函数与内联处理位置；
+   - 该记录不影响其他 data 实参调用的继续处理。
+6. 当前函数在 `<target_path>` 外：处理完第 3 条的所有调用后，若没有记录接口、也没有入队 dispatcher/`data_chase`：
+   - `fallback_handler` 非 null → 按第 4 条记录 fallback；
+   - `fallback_handler` 为 null：
+     - 没有业务 data 下游调用（或调用均被排除）→ `unresolved`（`kind = "target_path"`），detail 记录起点函数、`evidence_chain` 和已尝试的 data 实参调用；
+     - 否则（不存在未处理且未入队的业务 data 调用，调用均以 `definition`/`cycle` 终止）→ 不额外记 `target_path`，保留已有的 definition/cycle 记录。
+7. 由 `definition` 或 `cycle` 终止的路径不再重复记 `target_path`；已入队的路径由后续工作项处理。
+8. 真环 → `unresolved`（`kind = "cycle"`）；队列重复/菱形重复静默去重。
+9. 不设深度/扇出上限；同一函数有多个 data 实参调用时全部处理。
 
 ### 3.10 终止条件、去重与收尾
 
@@ -928,10 +935,10 @@ codegraph 未安装/未配置 → 用常规工具代替，不中断分析。
 | 分发函数 | 根据 cmdId 选择处理路径的函数，包括 Dispatch、转发器、OnRemoteRequest、内层分发函数 |
 | cmdId 用例 | 分发结构中的一个具体 case 或条件分支 |
 | 外层 cmd | 调用链上最外层的具体 cmdId 用例的宏/表达式和值 |
-| 接口函数 | cmdId 用例分支中直接接收客户端 data（或 data 派生值）且定义在 `<target_path>` 下的业务函数 |
+| 接口函数 | cmdId 用例分支中最终记录为外部接口的业务函数：位于 `<target_path>` 下并真正处理 data，或找不到真正处理函数时的最深封装函数 |
 | 封装函数 | target_path 内只做校验/日志/别名，并将 data 单线传给名称相近下游的函数 |
 | fallback_handler | 已发现的最深 target_path 封装函数；未找到真正处理函数时作为外部接口 |
-| 工作项 | 追踪队列中的单元，`kind` 为 `dispatch`（分发函数、当前 cmdId、外层 cmd、data 变量、`data_derived`、调用路径）或 `data_chase`（目标函数、data 变量、`effective_outer`、`origin_case_id`、调用路径） |
+| 工作项 | 追踪队列中的单元，`kind` 为 `dispatch`（分发函数、当前 cmdId、外层 cmd、data 变量、`data_derived`、调用路径）或 `data_chase`（目标函数、data 变量、`effective_outer`、`origin_case_id`、`fallback_handler`、`evidence_chain`、调用路径） |
 | 中间结果 | `scope_files.txt`、`scope_roots.txt`、`01_entry.json`、`02_bind.json`、`03_trace.json`、`error.json` 等调试文件 |
 | scope_files | 分析范围内展开后的精确文件清单 |
 | scope_roots | clean_code.txt 中原始的文件/文件夹条目清单 |
