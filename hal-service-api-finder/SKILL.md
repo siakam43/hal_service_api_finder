@@ -615,25 +615,26 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 
 1. 自身不处理 data：不读取/解析 data 字段，不基于 data 做业务分支或计算，不写入成员/全局，不执行业务动作；只允许参数校验、空指针/长度/魔数/范围检查、日志、局部别名和类型转换。
 2. 函数体简单；出现复杂控制流或难以判断的逻辑 → 按真正处理处理，停止下钻。
-3. 统计业务 data 下游调用（实参含 data/派生值，排除纯校验/纯日志/框架转换调用）：
+3. 统计业务 data 下游调用（实参含 data/派生值，排除纯校验/纯日志/框架转换调用，以及已知转发器/dispatcher 调用）：
    - 0 个 → 当前函数记为接口；
    - ≥ 2 个 → 当前函数记为接口；
    - 1 个 → 继续第 4 条。
 4. 该下游调用满足以下全部条件才判定为封装：
-   - 下游是普通业务函数，不是 dispatcher；
+   - 按 3.7 解析后只有一个定义（重载/多候选不判定为封装）；
+   - 下游是普通业务函数，不是 dispatcher/转发器；
    - 下游定义可解析且在 scope 内；
    - 去掉命名空间/类限定后，当前函数名与下游函数名中，一个是另一个的前缀或后缀扩展，多出的部分不超过 8 个字符，且两者不完全相同。
-5. 判定为封装 → 不记录当前函数，按 3.8 入队 `data_chase`，目标为唯一业务下游，`fallback_handler` = 当前函数。
+5. 判定为封装 → 不记录当前函数，按 3.8 入队 `data_chase`，目标为唯一业务下游，`fallback_handler` = 当前函数；`effective_outer` 取当前值，`origin_case_id` 取当前 case id，无条件处理时两者均为 null。
 6. 任一条件不满足 → 当前函数记为接口，停止。
 
 分支级规则：
 
-- 一个分支有多个 data 消费目标 → 每个目标分别按 `<target_path>` 判断：在目标路径下的逐个执行封装判定（封装入队 `data_chase`，否则写 `handlers`，共用同一 `effective_outer` 并把 `{name, file, line}` 追加到当前 case）；不在目标路径下的逐个入队 `data_chase`。
+- 一个分支有多个 data 消费目标 → 每个目标分别按 `<target_path>` 判断：在目标路径下的逐个执行封装判定（封装入队 `data_chase`，否则写 `handlers`，共用同一 `effective_outer`，并把 `{name, file, line}` 按该三元组去重后追加到当前 case）；不在目标路径下的逐个入队 `data_chase`。
 - 若函数既有 cmdId 分支，又在 `switch`/`if` 之前无条件消费 data（如 `ParseCommon(data)`），该无条件调用按 `"*"` 规则记录，不归属任何具体 case。
 - 一个分支只有内联 data 处理、没有调用目标 → 分发函数定义在 `<target_path>` 下时，把自身记为接口函数，`cmd_id_macro` / `cmd_id_value` 取 `effective_outer`；没有外层时 `cmd_id_macro = "*"`、`cmd_id_value = null`，并在该 case 的 `evidence` 中记录内联处理代码原文。不在 `<target_path>` 下时，记 `unresolved`（`kind = "target_path"`），detail 记录分发函数与内联处理位置。
 - `default` 分支只写入 `default_cases`（记录 dispatcher、分发位置与 evidence），不进入最终 JSON。
 - 无 cmdId 分支、函数自身直接消费 data（不经过调用）→ 在 `<target_path>` 下记为 `cmd_id_macro = "*"`、`cmd_id_value = null`；否则记 `unresolved`（`kind = "target_path"`）。
-- 无 cmdId 分支、无条件调用 data 消费函数 → 目标在 `<target_path>` 下时执行封装判定（封装入队 `data_chase`，否则记为 `cmd_id_macro = "*"`、`cmd_id_value = null`）；否则入队 `data_chase`。两种情况都在 evidence 中说明“无条件直接处理”；无当前 case 时写入追踪链。
+- 无 cmdId 分支、无条件调用 data 消费函数 → 目标在 `<target_path>` 下时执行封装判定（封装入队 `data_chase`，`effective_outer`/`origin_case_id` 均为 null；否则记为 `cmd_id_macro = "*"`、`cmd_id_value = null`）；否则入队 `data_chase`。两种情况都在 evidence 中说明“无条件直接处理”；无当前 case 时写入追踪链。
 - 只接收 cmdId、不接收 data、也不分发，或只接收 reply、不读 data 的目标，不得写入 `handlers`。
 - 纯日志/断言/框架转换/校验辅助等被忽略的调用，把调用原文与忽略原因追加到当前 case 的 `evidence`，不得静默丢弃。
 
@@ -717,7 +718,7 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 
 单个分支在以下任一条件满足时终止：
 
-1. 找到 `<target_path>` 下真正处理 data 的业务函数（已写入 `handlers`），或已记录 fallback；
+1. 找到 `<target_path>` 下真正处理 data 的业务函数（已写入 `handlers`）；
 2. 没有未处理的 data 消费目标（纯 cmdId 处理、纯转发已入队、data 消费目标已入队 `data_chase`、或目标被忽略）；
 3. 目标无法确定，已写入 `unresolved`；
 4. 真环命中（键在 `visited` 且其 `path` 是当前 `path` 的严格前缀）；队列重复/菱形重复按去重终止，不写 `unresolved`。
