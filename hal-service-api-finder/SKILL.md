@@ -27,7 +27,7 @@ description: 当用户调用 /hal-service-api-finder <project_dir> <service_name
 
 ### 输出
 
-最终输出：<project_dir>/.ethunter_out/hal-service-api-finder/<service_name>_api.json
+最终输出：<project_dir>/.ethunter_out/hal-service-api-finder/<service_name>/<service_name>_api.json
 
 最终 JSON 为扁平数组，每条记录四个字段：
 - cmd_id_macro：最外层具体 case 的宏名或表达式原文。
@@ -57,7 +57,7 @@ description: 当用户调用 /hal-service-api-finder <project_dir> <service_name
 
 ### 输出目录初始化
 
-- 输出根目录：`<out>` = `<project_dir>/.ethunter_out/hal-service-api-finder`。
+- 输出根目录：`<out>` = `<project_dir>/.ethunter_out/hal-service-api-finder/<service_name>`。
 - 若 `<out>` 已存在，先整体备份为 `<out>_bak`（旧 `<out>_bak` 先删除，只保留最近一次备份），再新建空 `<out>`；不得直接删除旧结果。`<out>` 不存在时保留现有 `<out>_bak`。
 
 ### 分析范围确定
@@ -105,7 +105,7 @@ find <project_dir> -type f \( -name "*.c" -o -name "*.h" -o -name "*.cpp" -o -na
 
 ### 搜索方法与纪律
 
-所有阶段统一使用以下三种方法；后续只写方法名与参数，不再重复命令。其中 `<out>` = `<project_dir>/.ethunter_out/hal-service-api-finder`。
+所有阶段统一使用以下三种方法；后续只写方法名与参数，不再重复命令。其中 `<out>` = `<project_dir>/.ethunter_out/hal-service-api-finder/<service_name>`。
 
 1. 精确字符串搜索：在 scope 内查找字面量。
 2. 正则/词边界搜索：需要正则时把 `-F` 换成 `-E`；需要词边界时加 `-w`。
@@ -965,12 +965,12 @@ codegraph 未安装/未配置 → 用常规工具代替，不中断分析。
 /hal-service-api-finder /srv/ohos/drivers demo_service
 ```
 
-1. 初始化：校验参数；若 `/srv/ohos/drivers/.ethunter_out/hal-service-api-finder` 已存在，先删除旧 `<out>_bak`（若存在），再把 `<out>` 备份为 `<out>_bak`，新建空目录；确定分析范围并生成 `<out>/scope_files.txt`（存在 `clean_code.txt` 时另生成 `<out>/scope_roots.txt`）。
+1. 初始化：校验参数；若 `/srv/ohos/drivers/.ethunter_out/hal-service-api-finder/demo_service` 已存在，先删除旧 `<out>_bak`（若存在），再把 `<out>` 备份为 `<out>_bak`，新建空目录；确定分析范围并生成 `<out>/scope_files.txt`（存在 `clean_code.txt` 时另生成 `<out>/scope_roots.txt`）。
 2. 阶段一：在 scope 内搜索 `"demo_service"`，定位 `struct HdfDriverEntry g_DemoDriverEntry = {...}` 与 `HDF_INIT(g_DemoDriverEntry)`；写 `<out>/01_entry.json`。
 3. 阶段二：定位 `HdfDemoDriverBind` 定义，识别 Host 类型与 `ioService.Dispatch = DemoDriverDispatch`，提取 `IDemoInterface`、`DemoService`、`DemoInterfaceStub` 及其 `OnRemoteRequest`；写 `<out>/02_bind.json`。
 4. 阶段三：以 `DemoDriverDispatch` 初始化内存队列，追踪 `SendRequest` 到 `DemoInterfaceStub::OnRemoteRequest`，枚举 8 个 cmdId 用例并解析宏值；对不在 `<target_path>` 下的直接目标继续沿 data 实参追踪，跳过名字相近的单线封装函数，直到 `DemoVendorInterface(data)` 按名字规则不再被判为封装；若只到达封装层，则记录最深的 `DemoVendorInterfaceWrapper`；队列为空后写 `<out>/03_trace.json`。
 5. 输出：自检后组装最终数组，写 `<out>/demo_service_api.json.tmp`，回读校验后 `mv` 为 `<out>/demo_service_api.json`，双方法确认存在。
-6. 完成报告：`127 files / 8 cases / 8 interfaces / 0 unresolved`；service_name = `demo_service`，入口变量 = `g_DemoDriverEntry`，Bind = `HdfDemoDriverBind`，Dispatch 数量 = 1；最终文件 `/srv/ohos/drivers/.ethunter_out/hal-service-api-finder/demo_service_api.json`。
+6. 完成报告：`127 files / 8 cases / 8 interfaces / 0 unresolved`；service_name = `demo_service`，入口变量 = `g_DemoDriverEntry`，Bind = `HdfDemoDriverBind`，Dispatch 数量 = 1；最终文件 `/srv/ohos/drivers/.ethunter_out/hal-service-api-finder/demo_service/demo_service_api.json`。
 
 ### 示例二：重复执行（备份旧结果）
 
