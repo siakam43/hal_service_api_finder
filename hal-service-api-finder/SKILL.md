@@ -613,19 +613,14 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 
 封装判定（仅对 `<target_path>` 下接收 data/派生参数、不构成分发、且不是排除项的业务函数）：
 
-1. 自身不处理 data：读取 data 仅限参数校验（空指针/长度/魔数/范围检查），不解析业务字段，不基于 data 做业务分支或计算，不写入成员/全局，不执行业务动作；允许日志、局部别名和类型转换。
-2. 函数体简单；出现复杂控制流或难以判断的逻辑 → 按真正处理处理，停止下钻。
-3. 统计业务 data 下游调用（实参含 data/派生值，排除纯校验/纯日志/框架转换调用）：
-   - 0 个 → 当前函数记为接口；
-   - ≥ 2 个 → 当前函数记为接口；
-   - 1 个 → 继续第 4 条。
-4. 该下游调用满足以下全部条件才判定为封装：
-   - 按 3.7 解析后只有一个定义（重载/多候选不判定为封装）；
-   - 下游是普通业务函数，不是 dispatcher/转发器；
-   - 下游定义可解析且在 scope 内；
-   - 去掉命名空间/类限定后，当前函数名与下游函数名中，一个是另一个的前缀或后缀扩展，多出的部分不超过 8 个字符，且两者不完全相同。
+1. 找出函数体内所有“实参含 data 或 data 派生值”的调用，按目标定义 `(file, line)` 去重；同一目标被调用多次只算一个目标。
+2. 不同目标数为 0 → 当前函数记为接口。
+3. 不同目标数 ≥ 2 → 当前函数记为接口。
+4. 只有一个不同目标时：
+   - 目标定义不在 `<target_path>` 或不在 scope 内 → 当前函数记为接口；
+   - 目标是 dispatcher/转发器 → 不按封装处理，当前函数不记录，按现有 dispatch 规则入队该目标（`current_cmd_expr` 取调用点 cmdId 实参，`parent_case_id = origin_case_id`）；若当前已有 `fallback_handler`，按 3.9 现有 dispatcher 规则处理；
+   - 目标是普通业务函数：去掉命名空间/类限定后比较名称。名称完全相同，或一个是另一个的前缀/后缀扩展且多出的部分不超过 8 个字符 → 判定为封装；否则当前函数记为接口。
 5. 判定为封装 → 不记录当前函数，按 3.8 入队 `data_chase`，目标为唯一业务下游，`fallback_handler` = 当前函数；`effective_outer` 取当前值，`origin_case_id` 取当前 case id，无条件处理时两者均为 null；把 `当前函数名(data)` 追加到 `evidence_chain`。
-6. 任一条件不满足 → 当前函数记为接口，停止。
 
 分支级规则：
 
@@ -695,7 +690,8 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 1. 按 3.2 的同样方法读取函数完整函数体；定义不在 scope 内或无法唯一确定 → 记 `unresolved`（`kind = "definition"`），结束该工作项。
 2. 若当前函数定义在 `<target_path>` 下且是接收 data 的业务函数（非 dispatcher、非排除项）：按 3.6 的封装判定处理：
    - 封装 → 按 3.8 入队 `data_chase`，目标为唯一业务下游，`fallback_handler` = 当前函数，并把 `当前函数名(data)` 追加到 `evidence_chain`；结束当前工作项；
-   - 真正处理、0 个业务下游、多个业务下游、下游是 dispatcher、名字不相近或定义不可解析 → 按第 4 条记录当前函数，结束当前工作项。
+   - 唯一目标是 dispatcher/转发器 → 不记录当前函数；若已有 `fallback_handler`，按 3.9 现有 dispatcher 规则记录 fallback；否则按 3.8 入队 dispatch；结束当前工作项；
+   - 其余（0 个/多个目标、目标在路径外或 scope 外、名字不匹配等）→ 按第 4 条记录当前函数，结束当前工作项。
 3. 当前函数在 `<target_path>` 外：按 3.5 找出所有“实参含 data 或 data 派生值”的调用，对每个调用按 3.7 解析目标：
    - 定义不在 scope、无法唯一确定或函数体不完整 → 记 `unresolved`（`kind = "definition"`），继续下一个调用；
    - 已知转发器（`SendRequest`、`OnRemoteRequest`、已知 dispatcher）→ 若 `fallback_handler` 非 null，按第 4 条记录 fallback；否则按 3.8 入队 `kind = "dispatch"` 工作项，`current_cmd_expr` 取调用点传入的 cmdId 实参，`parent_case_id = origin_case_id`，其余字段按 3.8 构造；
