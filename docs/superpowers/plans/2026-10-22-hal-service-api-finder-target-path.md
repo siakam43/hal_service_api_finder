@@ -272,7 +272,7 @@ with the new section followed by the renumbered heading:
 2. 按 3.5 找出函数体内所有“实参含 data 或 data 派生值”的调用。
 3. 对每个调用按 3.7 解析目标定义，然后分类：
    - 定义不在 scope、无法唯一确定或函数体不完整 → 记 `unresolved`（`kind = "definition"`），继续下一个调用；
-   - 已知转发器（`SendRequest`、`OnRemoteRequest`、已知 dispatcher）→ 按 3.8 入队 `kind = "dispatch"` 工作项；
+   - 已知转发器（`SendRequest`、`OnRemoteRequest`、已知 dispatcher）→ 按 3.8 入队 `kind = "dispatch"` 工作项，`current_cmd_expr` 取调用点传入的 cmdId 实参，`parent_case_id = origin_case_id`，其余字段按 3.8 构造；
    - 接收 cmdId + data 且函数体内有分发逻辑 → 按 3.8 入队 `kind = "dispatch"` 工作项，`current_cmd_expr` 取调用点传入的 cmdId 实参，`parent_case_id = origin_case_id`，其余字段按 3.8 构造；
    - 接收 data 的业务函数，定义在 `<target_path>` 下 → 记为接口（见第 4 条）；
    - 接收 data 的业务函数，定义不在 `<target_path>` 下 → 按 3.8 入队新的 `kind = "data_chase"` 工作项；
@@ -322,7 +322,7 @@ with:
 After the four termination conditions in 3.10, insert:
 
 ```text
-`data_chase` 工作项在 3.9 的全部 data 实参目标分类完成、且没有继续入队的工作项后终止。
+`data_chase` 工作项在 3.9 的全部 data 实参目标分类完成后终止；继续入队的 dispatcher 或 `data_chase` 作为新的工作项处理，不阻塞当前项移除。
 ```
 
 Replace the `visited` bullet:
