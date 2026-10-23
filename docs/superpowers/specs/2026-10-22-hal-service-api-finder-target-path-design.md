@@ -156,7 +156,7 @@
 - 第七章开头改为：
 
 ```text
-阶段三只做一件事：从阶段二的 Dispatch（或 stub 的 OnRemoteRequest）出发，沿全部分发路径追踪 cmdId 与 data 的流向。对不在 `<target_path>` 下的 data 业务函数，沿 data 实参继续追踪；到 `<target_path>` 内接收 data 的业务函数即停止，不展开其内部实现，也不做完整污点传播。最终把接口函数候选写入 `<out>/03_trace.json`。
+阶段三只做一件事：从阶段二的 Dispatch（或 stub 的 OnRemoteRequest）出发，沿全部分发路径追踪 cmdId 与 data 的流向。对不在 `<target_path>` 下的 data 业务函数，沿 data 实参继续追踪；到 `<target_path>` 内接收 data 且不构成分发的业务函数即停止，不展开其内部实现，也不做完整污点传播。最终把接口函数候选写入 `<out>/03_trace.json`。
 ```
 
 - 第一章核心原则 3 改为：
@@ -187,7 +187,7 @@
 - 第十一章抗理性化对应行改为：
 
 ```text
-| “业务函数内部还有处理，继续展开” | target_path 外只沿 data 实参追踪到目标路径；target_path 内不展开业务实现。 |
+| “业务函数内部还有处理，继续展开” | `<target_path>` 外只沿 data 实参追踪到目标路径；`<target_path>` 内不展开业务实现。 |
 ```
 
 - 第十二章示例一阶段三改为：以 `DemoDriverDispatch` 初始化内存队列，追踪 `SendRequest` 到 `DemoInterfaceStub::OnRemoteRequest`，枚举 8 个 cmdId 用例并解析宏值；对不在 `<target_path>` 下的直接目标继续沿 data 实参追踪，直到 `DemoVendorInterface(data)` 落在 `<target_path>` 下；队列为空后写 `<out>/03_trace.json`。
