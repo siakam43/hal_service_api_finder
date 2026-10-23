@@ -20,7 +20,7 @@
 ### Task 1: Update global wording, terminology, and example
 
 **Files:**
-- Modify: `hal-service-api-finder/SKILL.md` (section 一 principle 3; section 七 intro; section 十 constraint 4 and terminology; section 十二 example 1)
+- Modify: `hal-service-api-finder/SKILL.md` (section 一 principle 3; section 三 3.5; section 七 intro; section 十 constraint 4 and terminology; section 十一 anti-rationalization; section 十二 example 1)
 
 - [ ] **Step 1: Replace core principle 3**
 
@@ -47,7 +47,7 @@ Replace:
 with:
 
 ```text
-阶段三只做一件事：从阶段二的 Dispatch（或 stub 的 OnRemoteRequest）出发，沿全部分发路径追踪 cmdId 与 data 的流向。对不在 `<target_path>` 下的 data 业务函数，沿 data 实参继续追踪；到 `<target_path>` 内接收 data 且不构成分发的业务函数后，只对明显的单线封装继续下钻，停在真正处理 data 的函数；找不到时保留最深封装函数。不展开最终接口的内部实现，也不做完整污点传播。最终把接口函数候选写入 `<out>/03_trace.json`。
+阶段三只做一件事：从阶段二的 Dispatch（或 stub 的 OnRemoteRequest）出发，沿全部分发路径追踪 cmdId 与 data 的流向。对不在 `<target_path>` 下的 data 业务函数，沿 data 实参继续追踪；到 `<target_path>` 内接收 data 且不构成分发的业务函数后，只对明显的单线封装继续下钻，停在真正处理 data 的函数；找不到时保留最深的 `<target_path>` 封装函数。不展开最终接口的内部实现，也不做完整污点传播。最终把接口函数候选写入 `<out>/03_trace.json`。
 ```
 
 - [ ] **Step 3: Replace constraint 4**
@@ -61,10 +61,38 @@ Replace:
 with:
 
 ```text
-4. 只输出 `<target_path>` 下真正处理 data 的业务函数；明显单线封装继续下钻，找不到真正处理函数时输出最深封装函数（含 3.6 的 `*` 无条件/内联处理记录）。目标路径外只沿 data 实参继续追踪，不展开最终接口内部实现。
+4. 只输出 `<target_path>` 下真正处理 data 的业务函数（含 3.6 的 `*` 无条件/内联处理记录）；明显单线封装继续下钻，找不到真正处理函数时输出最深的 `<target_path>` 封装函数。目标路径外只沿 data 实参继续追踪，不展开最终接口内部实现。
 ```
 
-- [ ] **Step 4: Add terminology rows**
+- [ ] **Step 4: Replace the 3.5 local-tracing bullet**
+
+Replace:
+
+```text
+- 只做分类所需的局部追踪，不要求完整污点传播路径；C++ 间接调用、虚函数、函数指针、重载等解析可参考 `taint-path-walker` skill，本 skill 只追踪到 `<target_path>` 内的业务函数或明确终止条件。
+```
+
+with:
+
+```text
+- 只做分类所需的局部追踪，不要求完整污点传播路径；C++ 间接调用、虚函数、函数指针、重载等解析可参考 `taint-path-walker` skill，本 skill 只追踪到真正处理 data 的业务函数（明显单线封装继续按 3.6 下钻）或明确终止条件。
+```
+
+- [ ] **Step 5: Replace the anti-rationalization row**
+
+Replace:
+
+```text
+| “业务函数内部还有处理，继续展开” | `<target_path>` 外只沿 data 实参追踪到目标路径；`<target_path>` 内不展开业务实现。 |
+```
+
+with:
+
+```text
+| “业务函数内部还有处理，继续展开” | `<target_path>` 外只沿 data 实参追踪到目标路径；`<target_path>` 内只对明显单线封装继续下钻，不展开最终接口实现。 |
+```
+
+- [ ] **Step 6: Add terminology rows**
 
 After:
 
@@ -79,7 +107,7 @@ insert:
 | fallback_handler | 已发现的最深 target_path 封装函数；未找到真正处理函数时作为外部接口 |
 ```
 
-- [ ] **Step 5: Update example 1 phase 3**
+- [ ] **Step 7: Update example 1 phase 3**
 
 Replace:
 
@@ -90,23 +118,27 @@ Replace:
 with:
 
 ```text
-4. 阶段三：以 `DemoDriverDispatch` 初始化内存队列，追踪 `SendRequest` 到 `DemoInterfaceStub::OnRemoteRequest`，枚举 8 个 cmdId 用例并解析宏值；对不在 `<target_path>` 下的直接目标继续沿 data 实参追踪，跳过明显封装函数，直到 `DemoVendorInterface(data)` 真正处理 data；若只到达封装层，则记录最深的 `DemoVendorWrapper`；队列为空后写 `<out>/03_trace.json`。
+4. 阶段三：以 `DemoDriverDispatch` 初始化内存队列，追踪 `SendRequest` 到 `DemoInterfaceStub::OnRemoteRequest`，枚举 8 个 cmdId 用例并解析宏值；对不在 `<target_path>` 下的直接目标继续沿 data 实参追踪，跳过明显封装函数，直到 `DemoVendorInterface(data)` 真正处理 data；若只到达封装层，则记录最深的 `DemoVendorInterfaceWrapper`；队列为空后写 `<out>/03_trace.json`。
 ```
 
-- [ ] **Step 6: Verify Task 1**
+- [ ] **Step 8: Verify Task 1**
 
 ```bash
 grep -n '只识别目标路径内真正处理 data 的业务函数' hal-service-api-finder/SKILL.md
 grep -n '只输出 `<target_path>` 下真正处理 data 的业务函数' hal-service-api-finder/SKILL.md
+grep -n '最深的 `<target_path>` 封装函数' hal-service-api-finder/SKILL.md
+grep -n '明显单线封装继续按 3.6 下钻' hal-service-api-finder/SKILL.md
+grep -n '明显单线封装继续下钻，不展开最终接口实现' hal-service-api-finder/SKILL.md
 grep -n '| 封装函数 |' hal-service-api-finder/SKILL.md
 grep -n '| fallback_handler |' hal-service-api-finder/SKILL.md
-grep -n 'DemoVendorWrapper' hal-service-api-finder/SKILL.md
+grep -n 'DemoVendorInterfaceWrapper' hal-service-api-finder/SKILL.md
+grep -n 'DemoVendorWrapper' hal-service-api-finder/SKILL.md || echo 'old example name gone'
 grep -c '^## ' hal-service-api-finder/SKILL.md
 ```
 
-Expected: all five new lines present; 12 headings.
+Expected: all new wordings present; old example name gone; 12 headings.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
 git add hal-service-api-finder/SKILL.md
