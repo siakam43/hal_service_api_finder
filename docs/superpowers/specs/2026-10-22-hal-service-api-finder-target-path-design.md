@@ -22,7 +22,7 @@
 - `hal-service-api-finder/SKILL.md`：
   - 第一章核心原则 3、第十章约束 4、第十一章抗理性化对应行；
   - 第三章「参数解析」：新增 `<target_path>`；
-  - 第七章 3.1、3.2、3.6、3.8；
+  - 第七章开头、3.1、3.2、3.6、3.8；
   - 新增 3.9「target_path 深入追踪」，原 3.9 顺延为 3.10；
   - 3.10 的去重、终止、unresolved.kind；
   - 第七章收尾的 `03_trace.json` 字段说明；
@@ -57,6 +57,7 @@
 - 接收 data/派生参数且不构成分发的业务函数：
   - 定义文件在 `<target_path>` 下 → 记为接口函数（现有行为）；
   - 不在 `<target_path>` 下 → 不记为接口，按 3.8 入队 `kind = "data_chase"` 工作项，由 3.9 继续追踪。
+- 3.6 的表格行同步改为「在 `<target_path>` 下记为接口；否则入队 `data_chase`」；分支级的多个 data 消费目标规则改为逐个目标分别判断。
 - 接收 cmdId + data 且函数体内有分发 → 仍按内层 dispatcher 入队，不受 `<target_path>` 影响。
 - 排除项（纯日志、断言、框架 sbuf/parcel 转换、纯校验辅助、无业务动作、只收 cmdId 不收 data、只收 reply）仍然排除，即使定义在 `<target_path>` 下也不记为接口。
 - 一个分支只有内联 data 处理、没有调用目标时：
@@ -148,6 +149,12 @@
 - 3.1/3.2 中对原 3.9 的引用改为 3.10；收尾写 `03_trace.json` 的逻辑不变。
 
 ## 10. 其他章节
+
+- 第七章开头改为：
+
+```text
+阶段三只做一件事：从阶段二的 Dispatch（或 stub 的 OnRemoteRequest）出发，沿全部分发路径追踪 cmdId 与 data 的流向。对不在 `<target_path>` 下的 data 业务函数，沿 data 实参继续追踪；到 `<target_path>` 内接收 data 的业务函数即停止，不展开其内部实现，也不做完整污点传播。最终把接口函数候选写入 `<out>/03_trace.json`。
+```
 
 - 第一章核心原则 3 改为：
 
