@@ -38,10 +38,10 @@ with:
 
 - [ ] **Step 2: Add the target_path section to 参数解析**
 
-After item 4:
+After the two `service_name` bullets (`service_name` 字符集校验和搜索加引号说明):
 
 ```text
-4. `<service_name>` 仅去除首尾空白，保持大小写与其余字符不变，用于后续精确匹配。
+- 搜索时按字面量处理并正确加引号（优先 `grep -F`）。
 ```
 
 insert:
