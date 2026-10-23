@@ -1,7 +1,7 @@
 # hal-service-api-finder target_path 接口落地区域设计
 
 - 日期：2026-10-22
-- 状态：设计已确认，待实现
+- 状态：设计已确认并实现
 - 目标文件：`hal-service-api-finder/SKILL.md`
 
 ## 1. 背景与目标
@@ -113,15 +113,14 @@
 2. 按 3.5 找出函数体内所有“实参含 data 或 data 派生值”的调用。
 3. 对每个调用按 3.7 解析目标定义，然后分类：
    - 定义不在 scope、无法唯一确定或函数体不完整 → `unresolved`（`kind = "definition"`），停止该目标；
-   - 接收 cmdId + data 且函数体内有分发逻辑 → 按普通 dispatcher 入队（`kind = "dispatch"`），由它的分支继续应用 target_path 规则；
+   - 接收 cmdId（包括从 data 派生得到的 cmdId）且函数体内有分发逻辑 → 按普通 dispatcher 入队（`kind = "dispatch"`），由它的分支继续应用 target_path 规则；
    - 接收 data 的业务函数，定义在 `<target_path>` 下 → 记为接口（见第 7 节）；
    - 接收 data 的业务函数，定义不在 `<target_path>` 下 → 入队新的 `data_chase` 工作项，`data_vars` 取该目标中与 data 派生实参对应的形参；
    - 排除项 → 忽略，把调用原文与忽略原因追加到当前 case 的 `evidence`；
    - 不接收 data/派生参数 → 不追踪。
 4. 如果一个函数有多个 data 实参调用，全部处理，不设扇出上限。
-5. 如果函数体内没有任何 data 实参调用，且函数自身只是直接处理 data（内联处理）：
-   - 该函数在 `data_chase` 中意味着它不在 `<target_path>` 下，记 `unresolved`（`kind = "target_path"`），detail 记录起点函数与追踪链。
-6. 每条未到达 `<target_path>` 函数的追踪路径各记一条 `unresolved`（`kind = "target_path"`），detail 包含起点函数、`evidence_chain` 和已尝试的 data 实参调用；已到达的路径正常记接口，不因其他路径失败而丢弃。
+5. 如果函数自身直接处理 data（不经过调用），记一条 `unresolved`（`kind = "target_path"`），detail 记录起点函数与内联处理位置；该记录不影响其他 data 实参调用的继续处理。
+6. 对每条未到达 `<target_path>` 且未入队 dispatcher/`data_chase` 的追踪路径，记一条 `unresolved`（`kind = "target_path"`）；如果该函数没有任何 data 实参调用且没有内联处理，也记一条。detail 包含起点函数、`evidence_chain` 和已尝试的 data 实参调用。由 `definition` 或 `cycle` 终止的路径不再重复记 `target_path`；已入队的路径由后续工作项处理。
 7. 发现真环 → `unresolved`（`kind = "cycle"`）；重复/菱形路径静默去重。
 
 ## 7. 接口记录与归属

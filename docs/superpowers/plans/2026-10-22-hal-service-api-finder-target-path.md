@@ -175,7 +175,7 @@ git -c user.name=siakam43 -c user.email=429872468@qq.com commit -m "docs(hal-ser
 ### Task 2: Extend 3.8, add 3.9 data-chase, renumber 3.10
 
 **Files:**
-- Modify: `hal-service-api-finder/SKILL.md` (3.1 and 3.2 section-number references; 3.8; new 3.9; old 3.9 → 3.10)
+- Modify: `hal-service-api-finder/SKILL.md` (3.1 and 3.2 section-number references; 3.8; new 3.9; old 3.9 → 3.10; 术语表工作项)
 
 - [ ] **Step 1: Replace the 3.8 opening and add the two work-item kinds**
 
@@ -238,6 +238,18 @@ with:
 - 键命中 `queue`（按对应 `kind` 的键）：静默去重，不入队，不写 `unresolved`。
 ```
 
+Replace the 工作项 terminology row:
+
+```text
+| 工作项 | 追踪队列中的单元：`(分发函数, 当前 cmdId 变量, 外层 cmd, data 变量, data_derived, 调用路径)` |
+```
+
+with:
+
+```text
+| 工作项 | 追踪队列中的单元，`kind` 为 `dispatch`（分发函数、当前 cmdId、外层 cmd、data 变量、`data_derived`、调用路径）或 `data_chase`（目标函数、data 变量、`effective_outer`、`origin_case_id`、调用路径） |
+```
+
 - [ ] **Step 2: Add the data_chase dedup key**
 
 Replace:
@@ -273,7 +285,7 @@ with the new section followed by the renumbered heading:
 3. 对每个调用按 3.7 解析目标定义，然后分类：
    - 定义不在 scope、无法唯一确定或函数体不完整 → 记 `unresolved`（`kind = "definition"`），继续下一个调用；
    - 已知转发器（`SendRequest`、`OnRemoteRequest`、已知 dispatcher）→ 按 3.8 入队 `kind = "dispatch"` 工作项，`current_cmd_expr` 取调用点传入的 cmdId 实参，`parent_case_id = origin_case_id`，其余字段按 3.8 构造；
-   - 接收 cmdId + data 且函数体内有分发逻辑 → 按 3.8 入队 `kind = "dispatch"` 工作项，`current_cmd_expr` 取调用点传入的 cmdId 实参，`parent_case_id = origin_case_id`，其余字段按 3.8 构造；
+   - 接收 cmdId（包括从 data 派生得到的 cmdId）且函数体内有分发逻辑 → 按 3.8 入队 `kind = "dispatch"` 工作项，`current_cmd_expr` 取调用点传入的 cmdId 实参，`parent_case_id = origin_case_id`，其余字段按 3.8 构造；
    - 排除项 → 忽略，把调用原文与忽略原因追加到 `origin_case_id` 对应 case 的 `evidence`；`origin_case_id` 为 null 时写入当前追踪链；
    - 接收 data 的业务函数，定义在 `<target_path>` 下 → 记为接口（见第 4 条）；
    - 接收 data 的业务函数，定义不在 `<target_path>` 下 → 按 3.8 入队新的 `kind = "data_chase"` 工作项；
@@ -285,8 +297,8 @@ with the new section followed by the renumbered heading:
    - 把 `{name, file, line}` 追加到 `origin_case_id` 对应 case 的 `handlers`；`origin_case_id` 为 null 时不追加；
    - 在对应 case 的 `evidence` 追加追踪链（起点 → ... → 目标(data)）；
    - 按现有 handler 五元组去重。
-5. 如果函数体内没有任何 data 实参调用，且函数自身直接处理 data：记 `unresolved`（`kind = "target_path"`），detail 记录起点函数与追踪链。
-6. 仅当一条追踪路径终止且未到达 `<target_path>`（没有继续入队的 dispatcher 或 `data_chase`，也没有内联 data 处理）时，记一条 `unresolved`（`kind = "target_path"`），detail 包含起点函数、`evidence_chain` 和已尝试的 data 实参调用；已入队的路径由后续工作项处理，不在当前步骤记 `target_path`。
+5. 如果函数自身直接处理 data（不经过调用），记一条 `unresolved`（`kind = "target_path"`），detail 记录起点函数与内联处理位置；该记录不影响其他 data 实参调用的继续处理。
+6. 对每条未到达 `<target_path>` 且未入队 dispatcher/`data_chase` 的追踪路径，记一条 `unresolved`（`kind = "target_path"`）；如果该函数没有任何 data 实参调用且没有内联处理，也记一条。detail 包含起点函数、`evidence_chain` 和已尝试的 data 实参调用。由 `definition` 或 `cycle` 终止的路径不再重复记 `target_path`；已入队的路径由后续工作项处理。
 7. 真环 → `unresolved`（`kind = "cycle"`）；队列重复/菱形重复静默去重。
 8. 不设深度/扇出上限；同一函数有多个 data 实参调用时全部处理。
 
@@ -364,7 +376,7 @@ Update the two 3.1/3.2 references to the old finalization section:
 → end with `直接执行 3.10 的收尾。`
 
 ```text
-7. 该工作项的全部分支处理完后，从 `queue` 移除该项，把环检测键追加到 `visited`（见 3.9）。
+7. 该工作项的全部分支处理完后，从 `queue` 移除该项，把完整 `visited` 条目（含 `path` 与环检测键）追加到 `visited`（见 3.9）。
 8. 队列仍有项 → 继续下一项；队列为空 → 执行 3.9 收尾。
 ```
 
