@@ -662,7 +662,7 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 
 - `dispatch` 环检测键：`(函数定义文件+行号, current_cmd_expr, current_cmd_value, outer_cmd_expr, outer_cmd_value, sorted(data_vars), data_derived)`。不同 data 上下文（形参集合或派生状态不同）产生不同键，必须分别入队。
 - `data_chase` 环检测键：`(kind="data_chase", 定义文件+行号, effective_outer.expr, effective_outer.value, sorted(data_vars), origin_case_id)`。
-- 键命中 `queue`：静默去重，不入队，不写 `unresolved`。
+- 键命中 `queue`（按对应 `kind` 的键）：静默去重，不入队，不写 `unresolved`。
 - 键命中 `visited`：以准备入队的候选工作项的 `path` 为准；若该 visited 条目的 `path` 是候选 `path` 的严格前缀 → 真环，写 `unresolved`（`kind = "cycle"`），detail 记录该键与路径，终止该分支；否则是菱形/重复路径，静默去重，不写 `unresolved`。
 - 同一目标以不同的 cmd 上下文到达时键不同，必须分别入队；不得因函数名相同而合并。
 - 不设深度上限、不设扇出上限：同一分支的全部转发器/内层 dispatcher 都入队，按队列逐个处理。
@@ -675,19 +675,21 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 2. 按 3.5 找出函数体内所有“实参含 data 或 data 派生值”的调用。
 3. 对每个调用按 3.7 解析目标定义，然后分类：
    - 定义不在 scope、无法唯一确定或函数体不完整 → 记 `unresolved`（`kind = "definition"`），继续下一个调用；
-   - 接收 cmdId + data 且函数体内有分发逻辑 → 按 3.8 入队 `kind = "dispatch"` 工作项；
+   - 已知转发器（`SendRequest`、`OnRemoteRequest`、已知 dispatcher）→ 按 3.8 入队 `kind = "dispatch"` 工作项；
+   - 接收 cmdId + data 且函数体内有分发逻辑 → 按 3.8 入队 `kind = "dispatch"` 工作项，`current_cmd_expr` 取调用点传入的 cmdId 实参，`parent_case_id = origin_case_id`，其余字段按 3.8 构造；
    - 接收 data 的业务函数，定义在 `<target_path>` 下 → 记为接口（见第 4 条）；
    - 接收 data 的业务函数，定义不在 `<target_path>` 下 → 按 3.8 入队新的 `kind = "data_chase"` 工作项；
    - 排除项 → 忽略，把调用原文与忽略原因追加到 `origin_case_id` 对应 case 的 `evidence`；`origin_case_id` 为 null 时写入当前追踪链；
    - 不接收 data/派生参数 → 不追踪。
 4. 命中 `<target_path>` 业务函数时：
    - `interface_function`、`file`、`definition_line` 取该函数；
+   - 把 `{cmd_id_macro, cmd_id_value, interface_function, file, definition_line}` 写入顶层 `handlers`，按现有五元组去重；
    - `cmd_id_macro` / `cmd_id_value` 取 `effective_outer`；无外层时 `cmd_id_macro = "*"`、`cmd_id_value = null`；
    - 把 `{name, file, line}` 追加到 `origin_case_id` 对应 case 的 `handlers`；`origin_case_id` 为 null 时不追加；
    - 在对应 case 的 `evidence` 追加追踪链（起点 → ... → 目标(data)）；
    - 按现有 handler 五元组去重。
 5. 如果函数体内没有任何 data 实参调用，且函数自身直接处理 data：记 `unresolved`（`kind = "target_path"`），detail 记录起点函数与追踪链。
-6. 每条未到达 `<target_path>` 的追踪路径各记一条 `unresolved`（`kind = "target_path"`），detail 包含起点函数、`evidence_chain` 和已尝试的 data 实参调用；已到达的路径正常记接口。
+6. 仅当一条追踪路径终止且未到达 `<target_path>`（没有继续入队的 dispatcher 或 `data_chase`，也没有内联 data 处理）时，记一条 `unresolved`（`kind = "target_path"`），detail 包含起点函数、`evidence_chain` 和已尝试的 data 实参调用；已入队的路径由后续工作项处理，不在当前步骤记 `target_path`。
 7. 真环 → `unresolved`（`kind = "cycle"`）；队列重复/菱形重复静默去重。
 8. 不设深度/扇出上限；同一函数有多个 data 实参调用时全部处理。
 
@@ -696,11 +698,11 @@ cmdId 取值按以下规则解析，结果写入 `case_value`；失败时 `case_
 单个分支在以下任一条件满足时终止：
 
 1. 找到 `<target_path>` 下接收 data 且不构成分发的业务函数（接口函数已写入 `handlers`）；
-2. 没有 data 消费目标（纯 cmdId 处理、纯转发已入队、或目标被忽略）；
+2. 没有未处理的 data 消费目标（纯 cmdId 处理、纯转发已入队、data 消费目标已入队 `data_chase`、或目标被忽略）；
 3. 目标无法确定，已写入 `unresolved`；
 4. 真环命中（键在 `visited` 且其 `path` 是当前 `path` 的严格前缀）；队列重复/菱形重复按去重终止，不写 `unresolved`。
 
-data_chase 工作项在 3.9 的全部 data 实参目标分类完成后终止。
+`data_chase` 工作项在 3.9 的全部 data 实参目标分类完成、且没有继续入队的工作项后终止。
 
 - 分支终止后不得继续展开该分支；其他分支、其他工作项继续。
 - 同时分发并处理 data 的函数按 dispatcher 处理：继续分析其分支，不因它消费 data 就提前整体记为接口；只有满足 3.6“内联 data 处理且无调用目标”的分支才把 dispatcher 自身记为接口函数。
@@ -715,7 +717,7 @@ data_chase 工作项在 3.9 的全部 data 实参目标分类完成后终止。
 - `default_cases` 以 `(dispatcher_file, dispatcher_line, dispatch_site.file, dispatch_site.line)` 去重。
 - `unresolved` 以 `(kind, detail)` 去重，`tried` 合并后去重；同类候选只在首次出现时写 detail，后续补入 tried。
 - `dispatch_cache` 以 `(site.file, site.line, target)` 去重，条目包含 `site`、`target`、`candidates`、`resolved`。
-- `visited` 条目记录函数定义信息与 cmd 上下文：`dispatcher`、`dispatcher_file`、`dispatcher_line`、`current_cmd_expr`、`current_cmd_value`、`outer_cmd_expr`、`outer_cmd_value`、`data_vars`、`data_derived`、`path`；以环检测键去重。
+- `visited` 条目记录函数定义与上下文：dispatch 项记录 3.8 的 dispatch 字段，data_chase 项记录 3.8 的 data_chase 字段；以对应 kind 的环检测键去重。
 - `data_chase` 工作项以 `(kind, 定义文件+行号, effective_outer.expr, effective_outer.value, sorted(data_vars), origin_case_id)` 去重。
 - `unresolved.kind` 取值：`cmd_value` / `target` / `definition` / `data_deferred` / `cycle` / `target_path`。
 
